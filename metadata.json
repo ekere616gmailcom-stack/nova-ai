@@ -1,0 +1,6 @@
+{
+  "name": "Nova",
+  "description": "Multilingual AI chat assistant with real-time voice chat, image generation, Google sign-in, and persistent chat history.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

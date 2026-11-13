@@ -1,0 +1,206 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Hardened Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isSignedIn()
+        && request.auth.uid == userId
+        && request.auth.token.email_verified == true;
+    }
+
+    function isValidPlan(plan) {
+      return plan in ['free', 'premium'];
+    }
+
+    function isValidLanguage(lang) {
+      return lang in ['en', 'es', 'fr', 'pt', 'ar', 'hi', 'zh'];
+    }
+
+    function isValidVoice(voice) {
+      return voice in ['Zephyr', 'Kore', 'Puck', 'Charon', 'Fenrir'];
+    }
+
+    // --- Entity Validation Blueprints ---
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'email', 'plan', 'language',
+          'voiceName', 'dailyChatCount', 'lastUsageDate', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'email', 'photoURL', 'plan', 'language',
+          'voiceName', 'dailyChatCount', 'dailyImageCount', 'lastUsageDate', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && isValidPlan(data.plan)
+        && isValidLanguage(data.language)
+        && isValidVoice(data.voiceName)
+        && data.dailyChatCount is int && data.dailyChatCount >= 0 && data.dailyChatCount <= 100000
+        && (!('dailyImageCount' in data) || (data.dailyImageCount is int && data.dailyImageCount >= 0 && data.dailyImageCount <= 100000))
+        && data.lastUsageDate is string && data.lastUsageDate.size() == 10 && data.lastUsageDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChatSession(data, userId) {
+      return data.keys().hasAll([
+          'userId', 'title', 'lastMessagePreview', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'title', 'lastMessagePreview', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.userId)
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.lastMessagePreview is string && data.lastMessagePreview.size() <= 300
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChatMessage(data, userId, chatId) {
+      return data.keys().hasAll([
+          'userId', 'chatId', 'role', 'kind', 'content', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'chatId', 'role', 'kind', 'content', 'imageDataUrl', 'imageUrls', 'imagePrompt', 'createdAt'
+        ])
+        && isValidId(data.userId)
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && isValidId(data.chatId)
+        && data.chatId == chatId
+        && data.role in ['user', 'assistant']
+        && data.kind in ['text', 'image', 'voice']
+        && data.content is string && data.content.size() <= 50000
+        && (!('imageDataUrl' in data) || (data.imageDataUrl is string && data.imageDataUrl.size() <= 400000))
+        && (!('imageUrls' in data) || (data.imageUrls is list && data.imageUrls.size() >= 1 && data.imageUrls.size() <= 4 && data.imageUrls[0] is string))
+        && (!('imagePrompt' in data) || (data.imagePrompt is string && data.imagePrompt.size() <= 2000))
+        && data.createdAt is timestamp;
+    }
+
+    // --- Collection Match Rules ---
+    match /users/{userId} {
+      // PII Protection: Owner-only get, never list
+      allow get: if isValidId(userId) && isVerifiedOwner(userId);
+      allow list: if false;
+
+      allow create: if isValidId(userId)
+        && isVerifiedOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(userId)
+        && isVerifiedOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action: Update settings / profile display info
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'language', 'voiceName', 'updatedAt'])
+          ||
+          // Action: Increment daily chat or image quota
+          incoming().diff(existing()).affectedKeys().hasOnly(['dailyChatCount', 'dailyImageCount', 'lastUsageDate', 'updatedAt'])
+          ||
+          // Action: Change subscription plan
+          incoming().diff(existing()).affectedKeys().hasOnly(['plan', 'updatedAt'])
+        );
+
+      allow delete: if false;
+
+      match /chats/{chatId} {
+        allow get: if isValidId(userId) && isValidId(chatId) && isVerifiedOwner(userId);
+        allow list: if isValidId(userId) && isVerifiedOwner(userId) && resource.data.userId == request.auth.uid;
+
+        allow create: if isValidId(userId)
+          && isValidId(chatId)
+          && isVerifiedOwner(userId)
+          && isValidChatSession(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        allow update: if isValidId(userId)
+          && isValidId(chatId)
+          && isVerifiedOwner(userId)
+          && isValidChatSession(incoming(), userId)
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'lastMessagePreview', 'updatedAt']);
+
+        allow delete: if isValidId(userId) && isValidId(chatId) && isVerifiedOwner(userId);
+
+        match /messages/{messageId} {
+          allow get: if isValidId(userId) && isValidId(chatId) && isValidId(messageId) && isVerifiedOwner(userId);
+          allow list: if isValidId(userId) && isValidId(chatId) && isVerifiedOwner(userId) && resource.data.userId == request.auth.uid;
+
+          allow create: if isValidId(userId)
+            && isValidId(chatId)
+            && isValidId(messageId)
+            && isVerifiedOwner(userId)
+            && isValidChatMessage(incoming(), userId, chatId)
+            && incoming().createdAt == request.time
+            && get(/databases/$(database)/documents/users/$(userId)/chats/$(chatId)).data.userId == userId;
+
+          allow update: if false;
+          allow delete: if isValidId(userId) && isValidId(chatId) && isValidId(messageId) && isVerifiedOwner(userId);
+        }
+      }
+
+      function isValidContact(data, userId) {
+        return data.keys().hasAll(['userId', 'name', 'phone', 'createdAt'])
+          && data.keys().hasOnly(['userId', 'name', 'phone', 'createdAt'])
+          && isValidId(data.userId)
+          && data.userId == userId
+          && data.userId == request.auth.uid
+          && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+          && data.phone is string && data.phone.size() >= 3 && data.phone.size() <= 40
+          && data.createdAt is timestamp;
+      }
+
+      match /contacts/{contactId} {
+        allow get: if isValidId(userId) && isValidId(contactId) && isVerifiedOwner(userId);
+        allow list: if isValidId(userId) && isVerifiedOwner(userId) && resource.data.userId == request.auth.uid;
+
+        allow create: if isValidId(userId)
+          && isValidId(contactId)
+          && isVerifiedOwner(userId)
+          && isValidContact(incoming(), userId)
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        allow update: if false;
+        allow delete: if isValidId(userId) && isValidId(contactId) && isVerifiedOwner(userId);
+      }
+    }
+  }
+}
