@@ -192,7 +192,7 @@ export const TRANSLATIONS: Record<LanguageCode, TranslationStrings> = {
     share: 'Share',
     sharedCopied: 'Copied',
     disclaimer: 'Nova can make mistakes',
-    creatingImage: 'Nova is creating your image...',
+    creatingImage: 'Generating real image...',
     copyPrompt: 'Copy Prompt',
     variations: 'Variations',
     like: 'Like',

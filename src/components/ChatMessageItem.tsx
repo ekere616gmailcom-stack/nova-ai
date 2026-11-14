@@ -7,7 +7,9 @@ import {
   Copy,
   Download,
   Layers,
+  Loader2,
   Phone,
+  Share2,
   SlidersHorizontal,
   Square,
   ThumbsDown,
@@ -58,6 +60,7 @@ interface ChatMessageItemProps {
   voiceSpeed?: VoiceSpeed;
   isStreaming?: boolean;
   isCreatingImage?: boolean;
+  imageLoadingText?: string;
   isEditingBuiltApp?: boolean;
   onCreateVariations?: (prompt: string) => void;
   onEditBuiltApp?: (editInstruction: string, currentHtml: string) => void;
@@ -71,6 +74,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   voiceSpeed = 'normal',
   isStreaming = false,
   isCreatingImage = false,
+  imageLoadingText,
   isEditingBuiltApp = false,
   onCreateVariations,
   onEditBuiltApp,
@@ -80,6 +84,8 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
 
   const [copied, setCopied] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
+  const [sharedIdx, setSharedIdx] = useState<number | null>(null);
+  const [failedImageIndices, setFailedImageIndices] = useState<Record<number, boolean>>({});
   const [reaction, setReaction] = useState<'like' | 'dislike' | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [showVoiceControls, setShowVoiceControls] = useState(false);
@@ -240,17 +246,59 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
     document.body.removeChild(link);
   };
 
-  // User Bubble: Purple gradient #7C3AED -> #A855F7 with crisp white text
+  const handleShareImage = async (url: string, promptText: string, idx = 0) => {
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+        if (url.startsWith('data:')) {
+          const blob = await (await fetch(url)).blob();
+          const file = new File([blob], `nova-image-${idx + 1}.png`, {
+            type: blob.type || 'image/png',
+          });
+          if (navigator.canShare?.({ files: [file] })) {
+            await navigator.share({
+              title: 'Nova AI Image',
+              text: promptText || 'Created with Nova AI',
+              files: [file],
+            });
+            setSharedIdx(idx);
+            setTimeout(() => setSharedIdx(null), 1800);
+            return;
+          }
+        }
+        await navigator.share({
+          title: 'Nova AI Image',
+          text: promptText || 'Created with Nova AI',
+          url: url.startsWith('http') ? url : window.location.href,
+        });
+        setSharedIdx(idx);
+        setTimeout(() => setSharedIdx(null), 1800);
+        return;
+      }
+      await navigator.clipboard.writeText(url.startsWith('http') ? url : window.location.href);
+      setSharedIdx(idx);
+      setTimeout(() => setSharedIdx(null), 1800);
+    } catch {
+      try {
+        await navigator.clipboard.writeText(window.location.href);
+        setSharedIdx(idx);
+        setTimeout(() => setSharedIdx(null), 1800);
+      } catch {
+        // ignore user cancellation
+      }
+    }
+  };
+
+  // User Bubble: Pure White background with Pure Black text
   if (message.role === 'user') {
     return (
       <div className="flex justify-end w-full">
-        <div className="max-w-[90%] sm:max-w-[82%] rounded-2xl bg-gradient-to-r from-[#7C3AED] to-[#A855F7] px-4 py-2.5 text-[15px] leading-relaxed text-white shadow-[0_8px_28px_-8px_rgba(124,58,237,0.65)] space-y-2">
+        <div className="max-w-[90%] sm:max-w-[82%] rounded-2xl bg-white px-4 py-2.5 text-[15px] leading-relaxed text-black font-medium shadow-[0_0_24px_-10px_rgba(191,90,242,0.5)] border border-[#A855F7]/30 space-y-2">
           {message.imageDataUrl && (
             <img
               src={message.imageDataUrl}
               alt="Uploaded reference"
               referrerPolicy="no-referrer"
-              className="max-h-56 w-auto rounded-xl object-cover border border-white/20"
+              className="max-h-56 w-auto rounded-xl object-cover border border-black/15"
             />
           )}
           <p className="whitespace-pre-wrap break-words">{message.content}</p>
@@ -305,23 +353,25 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   return (
     <div className="flex items-start gap-3.5 w-full">
       <div className="shrink-0 mt-1">
-        <NovaLogo size={30} glow={false} />
+        <NovaLogo size={30} glow={true} />
       </div>
 
       <div className="flex-1 min-w-0 space-y-2.5">
         {hasMemoryUsed && !isStreaming && (
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-500/15 border border-sky-400/35 text-[11px] font-medium text-sky-200">
-            <Brain className="w-3 h-3 text-sky-300" />
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#0A0A0A] border border-[#BF5AF2]/55 text-[11px] font-medium text-white">
+            <Brain className="w-3 h-3 text-[#BF5AF2]" />
             <span>I remember you</span>
           </div>
         )}
 
-        {/* AI Bubble: Dark Grey #1A1A22 with White Text */}
-        <div className="rounded-2xl bg-[#1A1A22] border border-white/8 px-4 py-3.5 text-white space-y-3">
+        {/* Nova AI Bubble: Pure Black #000000 / #0A0A0A with Pure White Text and Neon Purple Left Border */}
+        <div className="rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/25 border-s-[3px] border-s-[#BF5AF2] px-4 py-3.5 text-white shadow-[0_0_24px_-14px_rgba(168,85,247,0.45)] space-y-3">
           {isCreatingImage ? (
-            <div className="space-y-3">
-              <p className="text-sm font-medium text-purple-200">{t.creatingImage}</p>
-              <div className="relative h-64 w-full max-w-md rounded-2xl bg-[#111118] border border-purple-500/25 overflow-hidden nova-shimmer" />
+            <div className="flex items-center gap-3 py-2">
+              <Loader2 className="w-5 h-5 animate-spin text-[#BF5AF2] shrink-0" />
+              <span className="text-sm font-medium text-white">
+                {imageLoadingText || 'Generating real image...'}
+              </span>
             </div>
           ) : galleryUrls.length > 0 ? (
             <div className="space-y-3">
@@ -331,51 +381,67 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                 }`}
               >
                 {galleryUrls.map((url, idx) => (
-                  <div
-                    key={idx}
-                    className="relative group rounded-2xl overflow-hidden border border-purple-500/25 bg-[#0A0A0F]"
-                  >
-                    <img
-                      src={url}
-                      alt={promptForActions || 'Nova generated artwork'}
-                      referrerPolicy="no-referrer"
-                      className="w-full h-auto block object-cover"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => handleDownloadImage(url, idx)}
-                      className="absolute bottom-2.5 end-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-black/75 backdrop-blur-md text-white border border-white/15 hover:border-purple-400 transition-colors cursor-pointer"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>{t.downloadImage}</span>
-                    </button>
+                  <div key={idx} className="space-y-2">
+                    <div className="relative group rounded-2xl overflow-hidden border border-[#A855F7]/40 bg-black">
+                      {failedImageIndices[idx] ? (
+                        <div className="p-4 text-xs text-white border border-[#BF5AF2]/40 rounded-2xl bg-black">
+                          Image failed to load. Please try generating again.
+                        </div>
+                      ) : (
+                        <img
+                          src={url}
+                          alt={promptForActions || 'Nova generated artwork'}
+                          referrerPolicy="no-referrer"
+                          onError={() =>
+                            setFailedImageIndices((prev) => ({ ...prev, [idx]: true }))
+                          }
+                          className="w-full h-auto block object-cover"
+                        />
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadImage(url, idx)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-medium bg-black border border-[#A855F7]/40 hover:border-[#BF5AF2] text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5 text-[#BF5AF2]" />
+                        <span>{t.downloadImage}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => void handleShareImage(url, promptForActions, idx)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-medium bg-black border border-[#A855F7]/40 hover:border-[#BF5AF2] text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        {sharedIdx === idx ? (
+                          <Check className="w-3.5 h-3.5 text-[#BF5AF2]" />
+                        ) : (
+                          <Share2 className="w-3.5 h-3.5 text-[#A855F7]" />
+                        )}
+                        <span>{sharedIdx === idx ? 'Shared' : t.share}</span>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
 
               {promptForActions && (
-                <p className="text-xs text-slate-300 leading-relaxed">{promptForActions}</p>
+                <p className="text-xs text-white/75 leading-relaxed">{promptForActions}</p>
               )}
 
               <div className="flex flex-wrap items-center gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => handleDownloadImage(galleryUrls[0], 0)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-medium bg-white/6 hover:bg-white/12 text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5 text-purple-300" />
-                  <span>{t.downloadImage}</span>
-                </button>
 
                 <button
                   type="button"
                   onClick={() => void handleCopyPrompt(promptForActions)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-medium bg-white/6 hover:bg-white/12 text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-medium bg-black border border-[#A855F7]/35 hover:border-[#BF5AF2] text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   {copiedPrompt ? (
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <Check className="w-3.5 h-3.5 text-[#BF5AF2]" />
                   ) : (
-                    <Copy className="w-3.5 h-3.5 text-purple-300" />
+                    <Copy className="w-3.5 h-3.5 text-[#A855F7]" />
                   )}
                   <span>{copiedPrompt ? t.copied : t.copyPrompt}</span>
                 </button>
@@ -384,7 +450,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                   <button
                     type="button"
                     onClick={() => onCreateVariations(promptForActions)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-medium bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-white nova-btn-glow transition-all whitespace-nowrap shrink-0 cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-medium bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     <Layers className="w-3.5 h-3.5" />
                     <span>{t.variations}</span>
@@ -397,16 +463,16 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                       type="button"
                       onClick={handleToggleSpeech}
                       title={isPlaying ? t.stopAudio : t.listen}
-                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
                         isPlaying
-                          ? 'bg-purple-500/25 border border-purple-400/50 text-white'
-                          : 'bg-white/6 hover:bg-white/12 text-white'
+                          ? 'bg-[#A855F7]/25 border-[#BF5AF2] text-white'
+                          : 'bg-black border-[#A855F7]/35 hover:border-[#BF5AF2] text-white'
                       }`}
                     >
                       {isPlaying ? (
-                        <Square className="w-3 h-3 fill-purple-400 text-purple-400" />
+                        <Square className="w-3 h-3 fill-[#BF5AF2] text-[#BF5AF2]" />
                       ) : (
-                        <Volume2 className="w-3.5 h-3.5 text-purple-300" />
+                        <Volume2 className="w-3.5 h-3.5 text-[#BF5AF2]" />
                       )}
                       <span>{isPlaying ? t.stopAudio : t.listen}</span>
                     </button>
@@ -418,11 +484,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                       aria-label="Voice pitch and speed settings"
                       className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-2xl text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
                         showVoiceControls
-                          ? 'bg-purple-500/20 border-purple-400/50 text-purple-100'
-                          : 'bg-white/6 border-transparent hover:bg-white/12 text-slate-300'
+                          ? 'bg-[#A855F7]/25 border-[#BF5AF2] text-white'
+                          : 'bg-black border-[#A855F7]/25 hover:border-[#BF5AF2]/60 text-white/80'
                       }`}
                     >
-                      <SlidersHorizontal className="w-3 h-3 text-purple-300" />
+                      <SlidersHorizontal className="w-3 h-3 text-[#BF5AF2]" />
                       <span className="font-mono tabular-nums">{speechRate.toFixed(1)}x</span>
                     </button>
                   </>
@@ -451,7 +517,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                       key={category}
                       type="button"
                       onClick={() => onQuickPickBuilderCategory(category)}
-                      className="px-3 py-1.5 rounded-2xl text-xs font-medium bg-[#12121A] hover:bg-purple-500/25 border border-purple-500/30 hover:border-purple-400 text-purple-100 transition-colors cursor-pointer"
+                      className="px-3 py-1.5 rounded-2xl text-xs font-medium bg-black hover:bg-[#A855F7]/25 border border-[#A855F7]/45 hover:border-[#BF5AF2] text-white transition-colors cursor-pointer"
                     >
                       {category}
                     </button>
@@ -459,23 +525,23 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                 </div>
               )}
               {callContact && (
-                <div className="rounded-2xl bg-[#0A0A0F] border border-purple-500/30 p-4 flex items-center justify-between gap-4">
+                <div className="rounded-2xl bg-black border border-[#A855F7]/40 p-4 flex items-center justify-between gap-4">
                   <div className="flex items-center gap-3.5 min-w-0">
-                    <div className="w-11 h-11 rounded-2xl bg-purple-600/25 border border-purple-500/40 flex items-center justify-center text-base font-semibold text-purple-200 shrink-0">
+                    <div className="w-11 h-11 rounded-2xl bg-[#A855F7]/20 border border-[#BF5AF2]/50 flex items-center justify-center text-base font-semibold text-white shrink-0">
                       {callContact.name.slice(0, 1).toUpperCase()}
                     </div>
                     <div className="min-w-0">
                       <div className="text-sm font-semibold text-white truncate">
                         {callContact.name}
                       </div>
-                      <div className="text-xs font-mono tabular-nums text-slate-300 mt-0.5">
+                      <div className="text-xs font-mono tabular-nums text-white/75 mt-0.5">
                         {callContact.phone}
                       </div>
                     </div>
                   </div>
                   <a
                     href={`tel:${callContact.phone.replace(/\s+/g, '')}`}
-                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors whitespace-nowrap shrink-0"
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap shrink-0"
                   >
                     <Phone className="w-4 h-4" />
                     <span>Call</span>
@@ -487,11 +553,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
             /* Instant 3-Dot Typing Animation */
             <div className="flex items-center gap-2.5 py-0.5" aria-label={t.thinking}>
               <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-purple-400 nova-dot" />
-                <span className="w-2 h-2 rounded-full bg-purple-400 nova-dot nova-dot-2" />
-                <span className="w-2 h-2 rounded-full bg-purple-400 nova-dot nova-dot-3" />
+                <span className="w-2 h-2 rounded-full bg-[#BF5AF2] nova-dot" />
+                <span className="w-2 h-2 rounded-full bg-[#A855F7] nova-dot nova-dot-2" />
+                <span className="w-2 h-2 rounded-full bg-[#BF5AF2] nova-dot nova-dot-3" />
               </div>
-              <span className="text-xs text-slate-400">Nova is typing...</span>
+              <span className="text-xs text-white/70">Nova is typing...</span>
             </div>
           ) : null}
         </div>
@@ -503,16 +569,16 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               type="button"
               onClick={handleCopy}
               title={t.copy}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs text-slate-400 hover:text-white hover:bg-white/6 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs text-white/70 hover:text-white hover:bg-[#A855F7]/15 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               {copied ? (
                 <>
-                  <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="text-emerald-400">{t.copied}</span>
+                  <Check className="w-3.5 h-3.5 text-[#BF5AF2]" />
+                  <span className="text-[#BF5AF2]">{t.copied}</span>
                 </>
               ) : (
                 <>
-                  <Copy className="w-3.5 h-3.5" />
+                  <Copy className="w-3.5 h-3.5 text-[#A855F7]" />
                   <span>{t.copy}</span>
                 </>
               )}
@@ -525,8 +591,8 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               aria-label={t.like}
               className={`p-1.5 rounded-xl transition-colors cursor-pointer ${
                 reaction === 'like'
-                  ? 'text-purple-300 bg-purple-500/20'
-                  : 'text-slate-400 hover:text-white hover:bg-white/6'
+                  ? 'text-white bg-[#A855F7]/30 border border-[#BF5AF2]/60'
+                  : 'text-white/65 hover:text-white hover:bg-[#A855F7]/15'
               }`}
             >
               <ThumbsUp className="w-3.5 h-3.5" />
@@ -539,8 +605,8 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               aria-label={t.dislike}
               className={`p-1.5 rounded-xl transition-colors cursor-pointer ${
                 reaction === 'dislike'
-                  ? 'text-rose-300 bg-rose-500/20'
-                  : 'text-slate-400 hover:text-white hover:bg-white/6'
+                  ? 'text-white bg-[#A855F7]/30 border border-[#BF5AF2]/60'
+                  : 'text-white/65 hover:text-white hover:bg-[#A855F7]/15'
               }`}
             >
               <ThumbsDown className="w-3.5 h-3.5" />
@@ -550,16 +616,16 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               type="button"
               onClick={handleToggleSpeech}
               title={isPlaying ? t.stopAudio : t.listen}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
                 isPlaying
-                  ? 'bg-purple-500/25 text-purple-100 border border-purple-400/45'
-                  : 'text-slate-300 hover:text-white hover:bg-white/6'
+                  ? 'bg-[#A855F7]/25 text-white border-[#BF5AF2]'
+                  : 'border-transparent text-white/80 hover:text-white hover:bg-[#A855F7]/15'
               }`}
             >
               {isPlaying ? (
-                <Square className="w-3 h-3 fill-purple-400 text-purple-400" />
+                <Square className="w-3 h-3 fill-[#BF5AF2] text-[#BF5AF2]" />
               ) : (
-                <Volume2 className="w-3.5 h-3.5 text-purple-300" />
+                <Volume2 className="w-3.5 h-3.5 text-[#BF5AF2]" />
               )}
               <span>{isPlaying ? t.stopAudio : t.listen}</span>
             </button>
@@ -571,23 +637,23 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               aria-label="Voice pitch and speed settings"
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
                 showVoiceControls
-                  ? 'bg-purple-500/20 border-purple-400/45 text-purple-100'
-                  : 'border-transparent text-slate-400 hover:text-white hover:bg-white/6'
+                  ? 'bg-[#A855F7]/25 border-[#BF5AF2] text-white'
+                  : 'border-transparent text-white/70 hover:text-white hover:bg-[#A855F7]/15'
               }`}
             >
-              <SlidersHorizontal className="w-3.5 h-3.5" />
+              <SlidersHorizontal className="w-3.5 h-3.5 text-[#A855F7]" />
               <span className="font-mono tabular-nums text-[11px]">
                 {speechRate.toFixed(1)}x · Pitch {speechPitch.toFixed(1)}
               </span>
             </button>
 
-            {ttsHint && <span className="text-xs text-slate-400">{ttsHint}</span>}
+            {ttsHint && <span className="text-xs text-white/65">{ttsHint}</span>}
           </div>
         )}
 
         {/* Inline Pitch & Speed Control Panel for SpeechSynthesis */}
         {!isStreaming && !isCreatingImage && showVoiceControls && message.content && (
-          <div className="rounded-2xl bg-[#13141E] border border-purple-500/25 p-3.5 space-y-3 max-w-md">
+          <div className="rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/35 p-3.5 space-y-3 max-w-md">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-semibold text-white">Voice Speed &amp; Pitch</span>
               <button
@@ -596,7 +662,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                   handleChangeRate(1.0);
                   handleChangePitch(1.0);
                 }}
-                className="text-[11px] text-purple-300 hover:text-white cursor-pointer"
+                className="text-[11px] text-[#BF5AF2] hover:text-white cursor-pointer"
               >
                 Reset
               </button>
@@ -605,8 +671,8 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
             {/* Speed Control */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between text-[11px]">
-                <span className="text-slate-300 font-medium">Speed</span>
-                <span className="font-mono tabular-nums text-purple-200">{speechRate.toFixed(1)}x</span>
+                <span className="text-white/80 font-medium">Speed</span>
+                <span className="font-mono tabular-nums text-[#BF5AF2]">{speechRate.toFixed(1)}x</span>
               </div>
               <input
                 type="range"
@@ -616,7 +682,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                 value={speechRate}
                 onChange={(e) => handleChangeRate(Number(e.target.value))}
                 aria-label="Voice speed"
-                className="w-full accent-purple-500 cursor-pointer"
+                className="w-full accent-[#BF5AF2] cursor-pointer"
               />
               <div className="flex items-center gap-1.5 flex-wrap">
                 {[0.75, 1.0, 1.25, 1.5].map((preset) => (
@@ -626,8 +692,8 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                     onClick={() => handleChangeRate(preset)}
                     className={`px-2 py-0.5 rounded-lg text-[11px] font-mono transition-colors cursor-pointer ${
                       Math.abs(speechRate - preset) < 0.06
-                        ? 'bg-purple-500/30 border border-purple-400/60 text-white'
-                        : 'bg-white/6 text-slate-300 hover:text-white'
+                        ? 'bg-[#A855F7]/30 border border-[#BF5AF2] text-white'
+                        : 'bg-black border border-white/15 text-white/75 hover:text-white'
                     }`}
                   >
                     {preset}x
@@ -637,10 +703,10 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
             </div>
 
             {/* Pitch Control */}
-            <div className="space-y-1.5 pt-1 border-t border-white/8">
+            <div className="space-y-1.5 pt-1 border-t border-white/10">
               <div className="flex items-center justify-between text-[11px]">
-                <span className="text-slate-300 font-medium">Pitch</span>
-                <span className="font-mono tabular-nums text-sky-200">{speechPitch.toFixed(1)}</span>
+                <span className="text-white/80 font-medium">Pitch</span>
+                <span className="font-mono tabular-nums text-[#BF5AF2]">{speechPitch.toFixed(1)}</span>
               </div>
               <input
                 type="range"
@@ -650,7 +716,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                 value={speechPitch}
                 onChange={(e) => handleChangePitch(Number(e.target.value))}
                 aria-label="Voice pitch"
-                className="w-full accent-sky-400 cursor-pointer"
+                className="w-full accent-[#A855F7] cursor-pointer"
               />
               <div className="flex items-center gap-1.5 flex-wrap">
                 {[
@@ -664,8 +730,8 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                     onClick={() => handleChangePitch(preset.val)}
                     className={`px-2.5 py-0.5 rounded-lg text-[11px] font-medium transition-colors cursor-pointer ${
                       Math.abs(speechPitch - preset.val) < 0.06
-                        ? 'bg-sky-500/30 border border-sky-400/60 text-white'
-                        : 'bg-white/6 text-slate-300 hover:text-white'
+                        ? 'bg-[#A855F7]/30 border border-[#BF5AF2] text-white'
+                        : 'bg-black border border-white/15 text-white/75 hover:text-white'
                     }`}
                   >
                     {preset.label}

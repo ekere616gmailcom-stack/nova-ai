@@ -17,14 +17,14 @@ export const NovaLogo: React.FC<NovaLogoProps> = ({
 
   return (
     <span
-      className={`inline-flex items-center justify-center overflow-hidden bg-white border border-white/25 shrink-0 select-none ${className}`}
+      className={`inline-flex items-center justify-center overflow-hidden bg-white border border-[#BF5AF2]/60 shrink-0 select-none ${className}`}
       style={{
         width: size,
         height: size,
         borderRadius: radius,
         boxShadow: glow
-          ? '0 0 18px rgba(168, 85, 247, 0.55), 0 0 8px rgba(56, 189, 248, 0.35)'
-          : '0 2px 8px rgba(0, 0, 0, 0.45)',
+          ? '0 0 22px rgba(191, 90, 242, 0.8), 0 0 10px rgba(168, 85, 247, 0.65)'
+          : '0 0 12px rgba(168, 85, 247, 0.35)',
       }}
       aria-label="Nova Logo"
     >

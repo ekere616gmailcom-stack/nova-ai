@@ -8,6 +8,8 @@ export type VoiceSpeed = 'slow' | 'normal' | 'fast';
 
 export type AspectRatio = '1:1' | '16:9' | '9:16';
 
+export type ImageGenMode = 'real-photo' | 'ai-art';
+
 export type ImageStyle =
   | 'Realistic'
   | 'Anime'

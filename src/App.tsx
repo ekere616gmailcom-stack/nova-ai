@@ -58,6 +58,7 @@ import {
   IMAGE_RATIOS,
   IMAGE_STUDIO_MODES,
   IMAGE_STYLES,
+  ImageGenMode,
   ImageStudioMode,
   ImageStyle,
   LanguageCode,
@@ -93,7 +94,6 @@ import { ImagesGalleryView } from './components/ImagesGalleryView';
 import { SpaceUploadedFile, SpaceView } from './components/SpaceView';
 import { LoginScreen } from './components/LoginScreen';
 import { ShareNovaModal } from './components/ShareNovaModal';
-import { renderGenerativeWallpaperDataUrl } from './lib/wallpaperCanvas';
 
 const GUEST_STORAGE_KEY = 'nova_guest_workspace_v2';
 const GUEST_CONTACTS_KEY = 'nova_guest_contacts_v1';
@@ -394,7 +394,14 @@ function loadGuestWorkspace(): {
       return {
         chats: Array.isArray(parsed.chats) ? parsed.chats : [],
         messagesByChat: parsed.messagesByChat || {},
-        savedImages: Array.isArray(parsed.savedImages) ? parsed.savedImages : [],
+        savedImages: Array.isArray(parsed.savedImages)
+          ? parsed.savedImages.filter(
+              (img) =>
+                img &&
+                typeof img.imageUrl === 'string' &&
+                !img.imageUrl.startsWith('data:image/svg+xml')
+            )
+          : [],
       };
     }
   } catch {
@@ -555,6 +562,23 @@ export default function App() {
 
   const [inputText, setInputText] = useState('');
   const [imageMode, setImageMode] = useState(false);
+  const [imageGenMode, setImageGenMode] = useState<ImageGenMode>(() => {
+    try {
+      const saved = localStorage.getItem('nova_image_gen_mode_v1');
+      if (saved === 'ai-art' || saved === 'real-photo') return saved;
+    } catch {
+      // ignore storage access issues
+    }
+    return 'real-photo';
+  });
+  const handleChangeImageGenMode = useCallback((mode: ImageGenMode) => {
+    setImageGenMode(mode);
+    try {
+      localStorage.setItem('nova_image_gen_mode_v1', mode);
+    } catch {
+      // ignore storage access issues
+    }
+  }, []);
   const [studioMode, setStudioMode] = useState<ImageStudioMode>('Generate Image');
   const [imageStyle, setImageStyle] = useState<ImageStyle>('Realistic');
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('1:1');
@@ -594,6 +618,8 @@ export default function App() {
     loadWallpaperState('guest')
   );
   const [isGeneratingWallpaper, setIsGeneratingWallpaper] = useState(false);
+  const [wallpaperError, setWallpaperError] = useState<string | null>(null);
+  const [imageStudioError, setImageStudioError] = useState<string | null>(null);
 
   const canUseFirestore = Boolean(authUser && authUser.emailVerified);
 
@@ -923,12 +949,21 @@ export default function App() {
     }
   }, [canUseFirestore, guestContacts]);
 
-  // Collect saved images from current messages as well
+  // Collect saved real images from current messages as well (exclude legacy SVG placeholders)
   const allHistoryImages = useMemo(() => {
     const map = new Map<string, SavedImageEntry>();
-    savedImages.forEach((img) => map.set(img.id, img));
+    savedImages.forEach((img) => {
+      if (img.imageUrl && !img.imageUrl.startsWith('data:image/svg+xml')) {
+        map.set(img.id, img);
+      }
+    });
     activeMessages.forEach((m) => {
-      if (m.role === 'assistant' && m.kind === 'image' && m.imageDataUrl) {
+      if (
+        m.role === 'assistant' &&
+        m.kind === 'image' &&
+        m.imageDataUrl &&
+        !m.imageDataUrl.startsWith('data:image/svg+xml')
+      ) {
         map.set(m.id, {
           id: m.id,
           chatId: m.chatId,
@@ -1190,6 +1225,7 @@ export default function App() {
   const handleGenerateWallpaper = async (style: WallpaperStyle) => {
     if (isGeneratingWallpaper) return;
     setIsGeneratingWallpaper(true);
+    setWallpaperError(null);
     try {
       const res = await fetch('/api/wallpaper', {
         method: 'POST',
@@ -1200,36 +1236,43 @@ export default function App() {
         imageUrl?: string | null;
         title?: string;
         quote?: string;
+        error?: string;
       };
 
       const title = data.title || `${style} Horizon`;
       const quote = data.quote || 'Begin today with clarity and calm.';
-      let finalImageUrl = data.imageUrl || '';
-      if (!finalImageUrl) {
-        finalImageUrl = renderGenerativeWallpaperDataUrl(style, title, quote);
+
+      if (!res.ok || !data.imageUrl) {
+        const friendlyErr =
+          data.error && !/http\s*\d{3}/i.test(data.error)
+            ? data.error
+            : 'Daily wallpaper generation is currently unavailable right now.';
+        setWallpaperError(friendlyErr);
+        updateWallpaperState({
+          style,
+          currentImageUrl: '',
+          currentTitle: title,
+          currentQuote: quote,
+        });
+        return;
       }
 
       updateWallpaperState({
         style,
-        currentImageUrl: finalImageUrl,
+        currentImageUrl: data.imageUrl,
         currentTitle: title,
         currentQuote: quote,
         lastGeneratedDate: getTodayDateKey(),
       });
-    } catch {
-      const fallbackTitle = `${style} Horizon`;
-      const fallbackQuote = 'Keep shining with clarity and purpose.';
-      const fallbackUrl = renderGenerativeWallpaperDataUrl(
-        style,
-        fallbackTitle,
-        fallbackQuote
-      );
+    } catch (err) {
+      const realErr =
+        err instanceof Error && err.message.trim()
+          ? err.message.trim()
+          : 'Wallpaper image generation failed.';
+      setWallpaperError(realErr);
       updateWallpaperState({
         style,
-        currentImageUrl: fallbackUrl,
-        currentTitle: fallbackTitle,
-        currentQuote: fallbackQuote,
-        lastGeneratedDate: getTodayDateKey(),
+        currentImageUrl: '',
       });
     } finally {
       setIsGeneratingWallpaper(false);
@@ -1508,9 +1551,11 @@ export default function App() {
     promptText: string,
     count: 1 | 4,
     sourceAttachment: typeof attachedImage,
-    overrides?: { styleOverride?: ImageStyle; ratioOverride?: AspectRatio }
+    overrides?: { styleOverride?: ImageStyle; ratioOverride?: AspectRatio; genModeOverride?: ImageGenMode }
   ) => {
     setIsGeneratingImage(true);
+    setImageStudioError(null);
+    const activeGenMode = overrides?.genModeOverride || imageGenMode;
     try {
       const res = await fetch('/api/image', {
         method: 'POST',
@@ -1519,22 +1564,38 @@ export default function App() {
           prompt: promptText,
           aspectRatio: overrides?.ratioOverride || aspectRatio,
           style: overrides?.styleOverride || imageStyle,
+          genMode: activeGenMode,
           count,
           sourceImage: sourceAttachment
             ? { base64: sourceAttachment.base64, mimeType: sourceAttachment.mimeType }
             : undefined,
         }),
       });
-      const data = await res.json();
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        imageUrl?: string;
+        imageUrls?: string[];
+        caption?: string;
+      };
       if (!res.ok) {
-        throw new Error(data.error || 'Image generation failed.');
+        const realImageErr =
+          data.error && !/aiza/i.test(data.error)
+            ? data.error
+            : 'Image generation failed. Please try again.';
+        throw new Error(realImageErr);
       }
 
-      const urls: string[] = Array.isArray(data.imageUrls)
-        ? data.imageUrls
-        : data.imageUrl
-          ? [data.imageUrl]
-          : [];
+      const urls: string[] = (
+        Array.isArray(data.imageUrls)
+          ? data.imageUrls
+          : data.imageUrl
+            ? [data.imageUrl]
+            : []
+      ).filter((u) => typeof u === 'string' && u.length > 0 && !u.startsWith('data:image/svg+xml'));
+
+      if (urls.length === 0) {
+        throw new Error('Image generation is currently unavailable right now.');
+      }
 
       const msgId = await saveMessage(chatId, {
         role: 'assistant',
@@ -1555,7 +1616,7 @@ export default function App() {
             imageUrl: compressedThumb,
             createdAtMs: Date.now(),
           },
-          ...prev.slice(0, 29),
+          ...prev.filter((item) => !item.imageUrl.startsWith('data:image/svg+xml')).slice(0, 29),
         ]);
       }
     } finally {
@@ -1715,7 +1776,7 @@ export default function App() {
           await saveMessage(chatId, {
             role: 'assistant',
             kind: 'text',
-            content: `[[NOVA_CALL:${partialMatch.name}|${partialMatch.phone}]]\n\nTap the green **Call** button when you're ready to call **${partialMatch.name}**.`,
+            content: `[[NOVA_CALL:${partialMatch.name}|${partialMatch.phone}]]\n\nTap the **Call** button when you're ready to call **${partialMatch.name}**.`,
           });
         } else {
           await saveMessage(chatId, {
@@ -1893,7 +1954,11 @@ export default function App() {
 
         if (!res.ok || !res.body) {
           const errData = (await res.json().catch(() => ({}))) as { error?: string };
-          throw new Error(errData.error || `Gemini request failed (HTTP ${res.status}).`);
+          const safeServerMsg =
+            errData.error && !/http\s*\d{3}|gemini request failed/i.test(errData.error)
+              ? errData.error
+              : "Nova couldn't connect to its AI service. Please try again.";
+          throw new Error(safeServerMsg);
         }
 
         const reader = res.body.getReader();
@@ -1936,7 +2001,7 @@ export default function App() {
         }
 
         const finalReply =
-          accumulated.trim() || 'Gemini returned an empty response. Please try asking again.';
+          accumulated.trim() || "Nova couldn't connect to its AI service. Please try again.";
         if (accumulated.trim() && clientCacheKey) {
           saveClientReplyCache(clientCacheKey, finalReply);
         }
@@ -1973,10 +2038,18 @@ export default function App() {
     } catch (err) {
       setStreamingContent('');
       setIsGeneratingImage(false);
-      const realError =
-        err instanceof Error && err.message.trim()
-          ? err.message.trim()
-          : String(err || 'Gemini API request failed.');
+      const rawMessage = err instanceof Error ? err.message.trim() : '';
+      const isSafeFriendlyServerError =
+        Boolean(rawMessage) &&
+        rawMessage.startsWith('Nova') &&
+        !/http\s*\d{3}|gemini request failed|aiza/i.test(rawMessage);
+      const friendlyMessage = useImage
+        ? rawMessage && !/http\s*\d{3}|gemini request failed|aiza/i.test(rawMessage)
+          ? rawMessage
+          : 'Image generation is currently unavailable right now.'
+        : isSafeFriendlyServerError
+          ? rawMessage
+          : "Nova couldn't connect to its AI service. Please try again.";
       if (activeSessionId) {
         const errMsgId = createId('msg');
         const errCreatedAtMs = Date.now();
@@ -1986,14 +2059,14 @@ export default function App() {
             chatId: activeSessionId,
             role: 'assistant',
             kind: 'text',
-            content: `**Gemini API Error:** ${realError}`,
+            content: friendlyMessage,
             createdAtMs: errCreatedAtMs,
           });
           void persistUserMsgPromise
             .then(() =>
               saveMessage(
                 activeSessionId,
-                { role: 'assistant', kind: 'text', content: `**Gemini API Error:** ${realError}` },
+                { role: 'assistant', kind: 'text', content: friendlyMessage },
                 errMsgId,
                 errCreatedAtMs
               )
@@ -2002,7 +2075,7 @@ export default function App() {
         } else {
           void saveMessage(
             activeSessionId,
-            { role: 'assistant', kind: 'text', content: `**Gemini API Error:** ${realError}` },
+            { role: 'assistant', kind: 'text', content: friendlyMessage },
             errMsgId,
             errCreatedAtMs
           ).catch(() => undefined);
@@ -2019,16 +2092,21 @@ export default function App() {
     prompt,
     style,
     aspectRatio: studioRatio,
+    genMode: studioGenMode,
     sourceAttachment,
   }: {
     mode: ImageStudioMode;
     prompt: string;
     style: ImageStyle;
     aspectRatio: AspectRatio;
+    genMode: ImageGenMode;
     sourceAttachment: typeof attachedImage;
   }) => {
     if (isSending || isGeneratingImage) return;
-    if (isImageLimitReached) return;
+    if (isImageLimitReached) {
+      setImageStudioError(t.imageLimitReachedTitle);
+      return;
+    }
 
     const modePrefixMap: Record<ImageStudioMode, string> = {
       'Generate Image': '',
@@ -2041,9 +2119,12 @@ export default function App() {
 
     const fullPrompt = `${modePrefixMap[mode]}${prompt.trim()}`;
     setIsSending(true);
+    setImageStudioError(null);
+    let targetChatId: string | null = null;
 
     try {
       const chatId = await ensureChatSession(prompt.trim());
+      targetChatId = chatId;
       await saveMessage(chatId, {
         role: 'user',
         kind: 'image',
@@ -2054,9 +2135,22 @@ export default function App() {
       await runImageGeneration(chatId, fullPrompt, 1, sourceAttachment, {
         styleOverride: style,
         ratioOverride: studioRatio,
+        genModeOverride: studioGenMode,
       });
-    } catch {
-      // calm recovery without raw JSON banner
+    } catch (err) {
+      const rawErr = err instanceof Error ? err.message.trim() : '';
+      const friendlyError =
+        rawErr && !/http\s*\d{3}|gemini request failed/i.test(rawErr)
+          ? rawErr
+          : 'Image generation is currently unavailable right now.';
+      setImageStudioError(friendlyError);
+      if (targetChatId) {
+        await saveMessage(targetChatId, {
+          role: 'assistant',
+          kind: 'text',
+          content: friendlyError,
+        }).catch(() => undefined);
+      }
     } finally {
       setIsSending(false);
     }
@@ -2064,14 +2158,32 @@ export default function App() {
 
   const handleCreateVariations = async (promptText: string) => {
     if (isSending) return;
-    if (isImageLimitReached) return;
+    if (isImageLimitReached) {
+      setImageStudioError(t.imageLimitReachedTitle);
+      return;
+    }
     setIsSending(true);
+    setImageStudioError(null);
+    let targetChatId: string | null = null;
     try {
       const chatId = await ensureChatSession(promptText);
+      targetChatId = chatId;
       await incrementUsage('image');
       await runImageGeneration(chatId, promptText, 4, null);
-    } catch {
-      // calm recovery
+    } catch (err) {
+      const rawErr = err instanceof Error ? err.message.trim() : '';
+      const friendlyError =
+        rawErr && !/http\s*\d{3}|gemini request failed/i.test(rawErr)
+          ? rawErr
+          : 'Image generation is currently unavailable right now.';
+      setImageStudioError(friendlyError);
+      if (targetChatId) {
+        await saveMessage(targetChatId, {
+          role: 'assistant',
+          kind: 'text',
+          content: friendlyError,
+        }).catch(() => undefined);
+      }
     } finally {
       setIsSending(false);
     }
@@ -2186,19 +2298,19 @@ export default function App() {
     <div className="w-full max-w-5xl mx-auto space-y-1.5">
       {/* Limit Banner */}
       {(isChatLimitReached || (imageMode && isImageLimitReached)) && (
-        <div className="rounded-2xl bg-[#1A1A22] border border-purple-500/40 px-3.5 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="rounded-2xl bg-[#0A0A0A] border border-[#BF5AF2]/55 px-3.5 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="text-xs font-semibold text-white">
               {imageMode && isImageLimitReached ? t.imageLimitReachedTitle : t.limitReachedTitle}
             </div>
-            <div className="text-[11px] text-slate-300 truncate">
+            <div className="text-[11px] text-white/70 truncate">
               {imageMode && isImageLimitReached ? t.imageLimitReachedDesc : t.limitReachedDesc}
             </div>
           </div>
           <button
             type="button"
             onClick={() => updateUserPreferences({ plan: 'premium' })}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-white nova-btn-glow transition-all whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Crown className="w-3.5 h-3.5" />
             <span>{t.upgradeToPremium}</span>
@@ -2208,17 +2320,17 @@ export default function App() {
 
       {/* Image Studio Controls above Chat Box when Image Mode is Active */}
       {imageMode && (
-        <div className="rounded-2xl bg-[#14141C] border border-purple-500/25 p-2.5 flex flex-col gap-2">
+        <div className="rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/40 p-2.5 flex flex-col gap-2">
           <div className="flex items-center gap-1.5 flex-wrap">
             {IMAGE_STYLES.map((style) => (
               <button
                 key={style}
                 type="button"
                 onClick={() => setImageStyle(style)}
-                className={`px-2.5 py-1 rounded-xl text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`px-2.5 py-1 rounded-xl text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
                   imageStyle === style
-                    ? 'bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-white'
-                    : 'bg-[#1A1A22] text-slate-300 hover:text-white'
+                    ? 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] border-[#BF5AF2] text-white nova-btn-glow'
+                    : 'bg-black border-[#A855F7]/25 text-white/75 hover:text-white hover:border-[#BF5AF2]'
                 }`}
               >
                 {style}
@@ -2226,24 +2338,24 @@ export default function App() {
             ))}
           </div>
 
-          <div className="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-white/8">
+          <div className="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-[#A855F7]/20">
             <div className="flex items-center gap-1.5 flex-wrap">
               {IMAGE_RATIOS.map((r) => (
                 <button
                   key={r.value}
                   type="button"
                   onClick={() => setAspectRatio(r.value)}
-                  className={`px-2 py-0.5 rounded-xl text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  className={`px-2 py-0.5 rounded-xl text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
                     aspectRatio === r.value
-                      ? 'bg-purple-500/25 border border-purple-400 text-purple-100'
-                      : 'bg-[#1A1A22] border border-transparent text-slate-400 hover:text-white'
+                      ? 'bg-[#A855F7]/30 border-[#BF5AF2] text-white'
+                      : 'bg-black border-[#A855F7]/25 text-white/70 hover:text-white'
                   }`}
                 >
                   {r.label}
                 </button>
               ))}
             </div>
-            <span className="text-[11px] font-mono tabular-nums text-slate-400">
+            <span className="text-[11px] font-mono tabular-nums text-white/65">
               {profile.plan === 'premium'
                 ? t.unlimitedChats
                 : `${Math.max(0, FREE_IMAGE_LIMIT - dailyImageUsed)}/${FREE_IMAGE_LIMIT} ${t.imagesLeftToday}`}
@@ -2253,42 +2365,74 @@ export default function App() {
       )}
 
       {/* Compact Rounded Bottom Chat Box */}
-      <div className="rounded-3xl bg-[#12121A] nova-glow-box px-2.5 py-1.5 sm:px-3 sm:py-2 transition-all">
+      <div className="rounded-3xl bg-[#0A0A0A] nova-glow-box px-2.5 py-1.5 sm:px-3 sm:py-2 transition-all">
         {/* Attached Image Preview */}
         {attachedImage && (
-          <div className="mb-1.5 inline-flex items-center gap-2 rounded-xl bg-[#1A1A22] border border-purple-500/30 p-1.5 pe-2.5">
+          <div className="mb-1.5 inline-flex items-center gap-2 rounded-xl bg-black border border-[#BF5AF2]/45 p-1.5 pe-2.5">
             <img
               src={attachedImage.previewUrl}
               alt={attachedImage.name}
               className="w-8 h-8 rounded-lg object-cover"
             />
-            <div className="text-xs text-slate-200 max-w-[160px] truncate">
+            <div className="text-xs text-white max-w-[160px] truncate">
               {attachedImage.name}
             </div>
             <button
               type="button"
               onClick={() => setAttachedImage(null)}
               aria-label="Remove attachment"
-              className="p-1 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+              className="p-1 rounded-lg text-white/65 hover:text-white cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
-        {/* Quick Builder Action Strip inside Chat Input Area */}
-        <div className="flex items-center justify-between gap-2 pb-1.5 mb-1 border-b border-white/6">
-          <button
-            type="button"
-            onClick={() => void handleStartWebsiteBuilder()}
-            disabled={isSending || isBuildingApp}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-medium bg-[#1A1A22] hover:bg-purple-500/20 border border-purple-500/30 text-purple-200 hover:text-white transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50"
-          >
-            <Globe className="w-3 h-3 text-sky-300 shrink-0" />
-            <span>🌐 Build Website / App</span>
-          </button>
+        {/* Quick Builder Action Strip + [ Real Photo 📸 ] [ AI Art 🎨 ] Switch inside Chat Input Area */}
+        <div className="flex items-center justify-between gap-2 pb-1.5 mb-1 border-b border-[#A855F7]/20 flex-wrap">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={() => void handleStartWebsiteBuilder()}
+              disabled={isSending || isBuildingApp}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-medium bg-black hover:bg-[#A855F7]/20 border border-[#A855F7]/40 hover:border-[#BF5AF2] text-white transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50"
+            >
+              <Globe className="w-3 h-3 text-[#BF5AF2] shrink-0" />
+              <span>Build Website / App</span>
+            </button>
+
+            <div
+              role="group"
+              aria-label="Image generation mode"
+              className="inline-flex items-center gap-1 p-0.5 rounded-xl bg-black border border-[#A855F7]/35"
+            >
+              <button
+                type="button"
+                onClick={() => handleChangeImageGenMode('real-photo')}
+                className={`px-2 py-0.5 rounded-lg text-[11px] font-medium transition-all cursor-pointer whitespace-nowrap border ${
+                  imageGenMode === 'real-photo'
+                    ? 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] border-[#BF5AF2] text-white nova-btn-glow'
+                    : 'bg-transparent border-transparent text-white/70 hover:text-white'
+                }`}
+              >
+                Real Photo 📸
+              </button>
+              <button
+                type="button"
+                onClick={() => handleChangeImageGenMode('ai-art')}
+                className={`px-2 py-0.5 rounded-lg text-[11px] font-medium transition-all cursor-pointer whitespace-nowrap border ${
+                  imageGenMode === 'ai-art'
+                    ? 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] border-[#BF5AF2] text-white nova-btn-glow'
+                    : 'bg-transparent border-transparent text-white/70 hover:text-white'
+                }`}
+              >
+                AI Art 🎨
+              </button>
+            </div>
+          </div>
+
           {voiceHint && (
-            <span className="text-[11px] text-slate-400 truncate">{voiceHint}</span>
+            <span className="text-[11px] text-white/70 truncate">{voiceHint}</span>
           )}
         </div>
 
@@ -2306,9 +2450,9 @@ export default function App() {
             onClick={() => fileInputRef.current?.click()}
             title={t.uploadImage}
             aria-label={t.uploadImage}
-            className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-[#1A1A22] border border-white/10 text-slate-200 hover:text-white hover:border-purple-400 transition-colors cursor-pointer shrink-0"
+            className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-black border border-[#A855F7]/35 text-white hover:border-[#BF5AF2] transition-colors cursor-pointer shrink-0"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-4 h-4 text-[#BF5AF2]" />
           </button>
 
           <textarea
@@ -2322,7 +2466,7 @@ export default function App() {
             onKeyDown={handleTextareaKeyDown}
             onFocus={() => {
               setTimeout(() => {
-                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
               }, 160);
             }}
             disabled={isChatLimitReached && !imageMode}
@@ -2335,7 +2479,7 @@ export default function App() {
                     ? t.imageInputPlaceholder
                     : t.inputPlaceholder
             }
-            className="flex-1 min-w-0 resize-none bg-transparent text-sm sm:text-[15px] text-white placeholder:text-slate-400 focus:outline-none leading-5 py-2 px-1 max-h-28 overflow-y-auto disabled:opacity-50"
+            className="flex-1 min-w-0 resize-none bg-transparent text-sm sm:text-[15px] text-white placeholder:text-white/45 focus:outline-none leading-5 py-2 px-1 max-h-28 overflow-y-auto disabled:opacity-50"
           />
 
           {/* Image Button */}
@@ -2346,11 +2490,11 @@ export default function App() {
             aria-label={t.generateImage}
             className={`inline-flex items-center justify-center gap-1 h-9 px-2.5 sm:px-3 rounded-full text-xs font-medium transition-all whitespace-nowrap shrink-0 cursor-pointer border ${
               imageMode
-                ? 'bg-gradient-to-r from-[#7C3AED] to-[#A855F7] border-purple-400 text-white nova-btn-glow'
-                : 'bg-[#1A1A22] border-white/10 text-slate-200 hover:text-white hover:border-purple-500/40'
+                ? 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] border-[#BF5AF2] text-white nova-btn-glow'
+                : 'bg-black border-[#A855F7]/35 text-white hover:border-[#BF5AF2]'
             }`}
           >
-            <Sparkles className="w-3.5 h-3.5 shrink-0" />
+            <Sparkles className="w-3.5 h-3.5 text-[#BF5AF2] shrink-0" />
             <span className="hidden sm:inline">{t.generateImage}</span>
           </button>
 
@@ -2363,26 +2507,26 @@ export default function App() {
             aria-label={isRecording ? t.stopDictation : t.dictate}
             className={`inline-flex items-center justify-center w-9 h-9 rounded-full transition-all shrink-0 cursor-pointer border ${
               isRecording
-                ? 'bg-rose-500/20 border-rose-400 text-rose-200'
-                : 'bg-[#1A1A22] border-white/10 text-slate-200 hover:text-white hover:border-purple-500/40'
+                ? 'bg-[#BF5AF2]/25 border-[#BF5AF2] text-white nova-active-glow'
+                : 'bg-black border-[#A855F7]/35 text-white hover:border-[#BF5AF2]'
             }`}
           >
             {isTranscribing ? (
-              <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
+              <Loader2 className="w-4 h-4 animate-spin text-[#BF5AF2]" />
             ) : isRecording ? (
-              <Square className="w-3.5 h-3.5 fill-rose-400 text-rose-400" />
+              <Square className="w-3.5 h-3.5 fill-[#BF5AF2] text-[#BF5AF2]" />
             ) : (
-              <Mic className="w-4 h-4" />
+              <Mic className="w-4 h-4 text-[#BF5AF2]" />
             )}
           </button>
 
-          {/* Send Button: Purple Arrow Right */}
+          {/* Send Button: Neon Purple with Glow */}
           <button
             type="button"
             onClick={() => void sendPrompt(inputText)}
             disabled={!inputText.trim() || isSending}
             aria-label={t.send}
-            className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-gradient-to-r from-[#7C3AED] to-[#A855F7] disabled:bg-white/10 disabled:from-white/10 disabled:to-white/10 disabled:text-slate-500 text-white nova-btn-glow disabled:shadow-none transition-all shrink-0 cursor-pointer"
+            className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] disabled:bg-white/10 disabled:from-white/10 disabled:to-white/10 disabled:text-white/35 text-white nova-btn-glow disabled:shadow-none transition-all shrink-0 cursor-pointer"
           >
             {isSending ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -2394,12 +2538,12 @@ export default function App() {
       </div>
 
       {/* Tiny Disclaimer below chat box */}
-      <p className="text-center text-[10px] text-slate-500 leading-none">{t.disclaimer}</p>
+      <p className="text-center text-[10px] text-white/50 leading-none">{t.disclaimer}</p>
     </div>
   );
 
   const sidebarContent = (
-    <div className="flex flex-col h-full bg-[#0A0A0F] border-e border-white/8 w-[272px] shrink-0">
+    <div className="flex flex-col h-full bg-[#0A0A0A] border-e border-[#A855F7]/35 w-[272px] shrink-0">
       {/* Top: Nova Logo + Collapse */}
       <div className="flex items-center justify-between gap-2 px-4 py-4">
         <button
@@ -2407,7 +2551,7 @@ export default function App() {
           onClick={handleNewChat}
           className="flex items-center gap-2.5 cursor-pointer"
         >
-          <NovaLogo size={30} />
+          <NovaLogo size={30} glow={true} />
           <span className="text-lg font-semibold tracking-tight text-white">
             {t.appName}
           </span>
@@ -2420,33 +2564,33 @@ export default function App() {
             setMobileDrawerOpen(false);
           }}
           aria-label="Collapse sidebar"
-          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+          className="p-2 rounded-xl text-white/65 hover:text-white hover:bg-black transition-colors cursor-pointer"
         >
           <PanelLeftClose className="w-4 h-4 hidden md:block" />
           <X className="w-4 h-4 md:hidden" />
         </button>
       </div>
 
-      {/* Purple Gradient New Chat Button */}
+      {/* Neon Purple New Chat Button */}
       <div className="px-3.5 pb-3 space-y-2.5">
         <button
           type="button"
           onClick={handleNewChat}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-white nova-btn-glow transition-all whitespace-nowrap cursor-pointer"
+          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           <span>{t.newChat}</span>
         </button>
 
         {/* Chats / Images History Tab Switcher */}
-        <div className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-[#12121A] border border-white/8">
+        <div className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-black border border-[#A855F7]/30">
           <button
             type="button"
             onClick={() => setHistoryTab('chats')}
             className={`py-1.5 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
               historyTab === 'chats'
-                ? 'bg-[#1A1A22] text-white'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-[#A855F7]/25 border border-[#BF5AF2]/60 text-white'
+                : 'text-white/65 hover:text-white border border-transparent'
             }`}
           >
             {t.chatsTab}
@@ -2456,8 +2600,8 @@ export default function App() {
             onClick={() => setHistoryTab('images')}
             className={`py-1.5 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
               historyTab === 'images'
-                ? 'bg-[#1A1A22] text-white'
-                : 'text-slate-400 hover:text-white'
+                ? 'bg-[#A855F7]/25 border border-[#BF5AF2]/60 text-white'
+                : 'text-white/65 hover:text-white border border-transparent'
             }`}
           >
             {t.imagesTab}
@@ -2466,13 +2610,13 @@ export default function App() {
 
         {historyTab === 'chats' && (
           <div className="relative">
-            <Search className="w-3.5 h-3.5 text-slate-500 absolute start-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <Search className="w-3.5 h-3.5 text-[#A855F7] absolute start-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={t.searchHistory}
-              className="w-full rounded-2xl bg-[#12121A] border border-white/8 ps-8 pe-3 py-2 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-500/50"
+              className="w-full rounded-2xl bg-black border border-[#A855F7]/30 ps-8 pe-3 py-2 text-xs text-white placeholder:text-white/45 focus:outline-none focus:border-[#BF5AF2]"
             />
           </div>
         )}
@@ -2482,7 +2626,7 @@ export default function App() {
       <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-2.5 py-1 space-y-1">
         {historyTab === 'chats' ? (
           filteredChats.length === 0 ? (
-            <div className="px-3 py-6 text-xs text-slate-500 leading-relaxed">
+            <div className="px-3 py-6 text-xs text-white/55 leading-relaxed">
               {t.historyEmpty}
             </div>
           ) : (
@@ -2505,16 +2649,16 @@ export default function App() {
                       setMobileDrawerOpen(false);
                     }
                   }}
-                  className={`group flex items-center justify-between gap-2 px-3 py-2.5 rounded-2xl text-xs transition-colors cursor-pointer ${
+                  className={`group flex items-center justify-between gap-2 px-3 py-2.5 rounded-2xl text-xs transition-all cursor-pointer border ${
                     isSelected
-                      ? 'bg-[#1A1A22] text-white border border-purple-500/35'
-                      : 'text-slate-300 hover:bg-[#14141C] border border-transparent'
+                      ? 'bg-black text-white border-[#BF5AF2] nova-active-glow'
+                      : 'text-white/75 hover:bg-black hover:text-white border-transparent hover:border-[#A855F7]/30'
                   }`}
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <MessageSquare
                       className={`w-3.5 h-3.5 shrink-0 ${
-                        isSelected ? 'text-purple-400' : 'text-slate-500'
+                        isSelected ? 'text-[#BF5AF2]' : 'text-[#A855F7]/65'
                       }`}
                     />
                     <span className="truncate font-medium">{chat.title}</span>
@@ -2523,7 +2667,7 @@ export default function App() {
                     type="button"
                     onClick={(e) => void handleDeleteChat(chat.id, e)}
                     aria-label={t.deleteChat}
-                    className="opacity-0 group-hover:opacity-100 p-1 rounded-lg text-slate-400 hover:text-rose-400 transition-opacity shrink-0 cursor-pointer"
+                    className="opacity-0 group-hover:opacity-100 p-1 rounded-lg text-white/55 hover:text-[#BF5AF2] transition-opacity shrink-0 cursor-pointer"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -2534,16 +2678,16 @@ export default function App() {
         ) : (
           <div className="space-y-3 px-1 py-1">
             {/* Image Studio Quick Buttons under Sidebar Images */}
-            <div className="rounded-2xl bg-[#12121A] border border-purple-500/20 p-2 space-y-1.5">
+            <div className="rounded-2xl bg-black border border-[#A855F7]/30 p-2 space-y-1.5">
               <div className="flex items-center justify-between px-1">
-                <span className="text-[11px] font-semibold text-purple-300">Image Studio</span>
+                <span className="text-[11px] font-semibold text-[#BF5AF2]">Image Studio</span>
                 <button
                   type="button"
                   onClick={() => {
                     setActiveView('images');
                     setMobileDrawerOpen(false);
                   }}
-                  className="text-[10px] text-slate-400 hover:text-white cursor-pointer"
+                  className="text-[10px] text-white/70 hover:text-white cursor-pointer"
                 >
                   Open Studio
                 </button>
@@ -2558,10 +2702,10 @@ export default function App() {
                       setActiveView('images');
                       setMobileDrawerOpen(false);
                     }}
-                    className={`px-2 py-1.5 rounded-xl text-[11px] font-medium text-start truncate transition-colors cursor-pointer ${
+                    className={`px-2 py-1.5 rounded-xl text-[11px] font-medium text-start truncate transition-colors cursor-pointer border ${
                       activeView === 'images' && studioMode === m
-                        ? 'bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-white'
-                        : 'bg-[#1A1A22] text-slate-300 hover:text-white hover:bg-[#22222C]'
+                        ? 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] border-[#BF5AF2] text-white'
+                        : 'bg-[#0A0A0A] border-[#A855F7]/25 text-white/80 hover:text-white hover:border-[#BF5AF2]'
                     }`}
                   >
                     {m}
@@ -2571,7 +2715,7 @@ export default function App() {
             </div>
 
             {allHistoryImages.length === 0 ? (
-              <div className="px-2 py-4 text-xs text-slate-500 leading-relaxed">
+              <div className="px-2 py-4 text-xs text-white/55 leading-relaxed">
                 {t.imagesEmpty}
               </div>
             ) : (
@@ -2584,7 +2728,7 @@ export default function App() {
                       setActiveView('chat');
                       setMobileDrawerOpen(false);
                     }}
-                    className="relative group rounded-xl overflow-hidden border border-white/10 bg-[#1A1A22] cursor-pointer aspect-square"
+                    className="relative group rounded-xl overflow-hidden border border-[#A855F7]/35 bg-black cursor-pointer aspect-square"
                   >
                     <img
                       src={img.imageUrl}
@@ -2596,10 +2740,10 @@ export default function App() {
                       href={img.imageUrl}
                       download={`nova-${img.id.slice(0, 6)}.png`}
                       onClick={(e) => e.stopPropagation()}
-                      className="opacity-0 group-hover:opacity-100 absolute bottom-1.5 end-1.5 p-1.5 rounded-lg bg-black/75 text-white transition-opacity"
+                      className="opacity-0 group-hover:opacity-100 absolute bottom-1.5 end-1.5 p-1.5 rounded-lg bg-black/85 border border-[#BF5AF2]/50 text-white transition-opacity"
                       aria-label={t.downloadImage}
                     >
-                      <Download className="w-3 h-3" />
+                      <Download className="w-3 h-3 text-[#BF5AF2]" />
                     </a>
                   </div>
                 ))}
@@ -2610,7 +2754,7 @@ export default function App() {
       </div>
 
       {/* Smart Features Nav: Contacts & Daily Wallpaper */}
-      <div className="px-3.5 py-2 border-t border-white/8 grid grid-cols-2 gap-1.5">
+      <div className="px-3.5 py-2 border-t border-[#A855F7]/25 grid grid-cols-2 gap-1.5">
         <button
           type="button"
           onClick={() => {
@@ -2619,11 +2763,11 @@ export default function App() {
           }}
           className={`flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-2xl text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap ${
             activeView === 'contacts'
-              ? 'bg-[#1A1A22] border-purple-500/50 text-white'
-              : 'bg-[#12121A] border-white/8 text-slate-300 hover:text-white hover:border-purple-500/35'
+              ? 'bg-black border-[#BF5AF2] text-white nova-active-glow'
+              : 'bg-black border-[#A855F7]/25 text-white/80 hover:text-white hover:border-[#BF5AF2]'
           }`}
         >
-          <Phone className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+          <Phone className="w-3.5 h-3.5 text-[#BF5AF2] shrink-0" />
           <span>Contacts</span>
         </button>
 
@@ -2638,17 +2782,17 @@ export default function App() {
           }}
           className={`flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-2xl text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap ${
             activeView === 'wallpaper'
-              ? 'bg-[#1A1A22] border-purple-500/50 text-white'
-              : 'bg-[#12121A] border-white/8 text-slate-300 hover:text-white hover:border-purple-500/35'
+              ? 'bg-black border-[#BF5AF2] text-white nova-active-glow'
+              : 'bg-black border-[#A855F7]/25 text-white/80 hover:text-white hover:border-[#BF5AF2]'
           }`}
         >
-          <Wallpaper className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+          <Wallpaper className="w-3.5 h-3.5 text-[#BF5AF2] shrink-0" />
           <span>Wallpaper</span>
         </button>
       </div>
 
       {/* Bottom: User Profile + Sign Out + Upgrade to Premium Button */}
-      <div className="p-3.5 border-t border-white/8 space-y-2">
+      <div className="p-3.5 border-t border-[#A855F7]/25 space-y-2">
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -2658,8 +2802,8 @@ export default function App() {
             }}
             className={`flex-1 flex items-center gap-2.5 px-2.5 py-2 rounded-2xl border transition-colors min-w-0 cursor-pointer ${
               activeView === 'profile'
-                ? 'bg-[#1A1A22] border-purple-500/50 text-white'
-                : 'bg-[#12121A] border-white/8 text-slate-200 hover:border-purple-500/35'
+                ? 'bg-black border-[#BF5AF2] text-white nova-active-glow'
+                : 'bg-black border-[#A855F7]/25 text-white hover:border-[#BF5AF2]'
             }`}
           >
             {(authUser?.photoURL || profile.photoURL) ? (
@@ -2670,8 +2814,8 @@ export default function App() {
                 className="w-8 h-8 rounded-xl object-cover shrink-0"
               />
             ) : (
-              <div className="w-8 h-8 rounded-xl bg-purple-600/25 flex items-center justify-center shrink-0">
-                <UserIcon className="w-4 h-4 text-purple-300" />
+              <div className="w-8 h-8 rounded-xl bg-[#A855F7]/20 border border-[#BF5AF2]/40 flex items-center justify-center shrink-0">
+                <UserIcon className="w-4 h-4 text-[#BF5AF2]" />
               </div>
             )}
             <div className="min-w-0 text-start">
@@ -2680,7 +2824,7 @@ export default function App() {
                   ? authUser.displayName || profile.displayName || authUser.email?.split('@')[0] || 'Nova User'
                   : 'Guest'}
               </div>
-              <div className="text-[11px] text-slate-400 truncate">
+              <div className="text-[11px] text-white/60 truncate">
                 {authUser
                   ? authUser.email || profile.email || 'Google Account'
                   : 'Guest mode'}
@@ -2693,9 +2837,9 @@ export default function App() {
             onClick={() => setSettingsModalOpen(true)}
             aria-label={t.settings}
             title={t.settings}
-            className="p-2.5 rounded-2xl bg-[#12121A] border border-white/8 text-slate-300 hover:text-white hover:border-purple-500/35 transition-colors shrink-0 cursor-pointer"
+            className="p-2.5 rounded-2xl bg-black border border-[#A855F7]/30 text-white/80 hover:text-white hover:border-[#BF5AF2] transition-colors shrink-0 cursor-pointer"
           >
-            <Settings className="w-4 h-4" />
+            <Settings className="w-4 h-4 text-[#BF5AF2]" />
           </button>
         </div>
 
@@ -2704,18 +2848,18 @@ export default function App() {
             <button
               type="button"
               onClick={handleSignInGoogle}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-2xl text-xs font-medium bg-[#1A1A22] hover:bg-[#22222C] border border-white/10 text-white transition-colors cursor-pointer whitespace-nowrap"
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-2xl text-xs font-medium bg-black hover:border-[#BF5AF2] border border-[#A855F7]/30 text-white transition-colors cursor-pointer whitespace-nowrap"
             >
-              <LogIn className="w-3.5 h-3.5 text-purple-300" />
+              <LogIn className="w-3.5 h-3.5 text-[#BF5AF2]" />
               <span>Google Sign In</span>
             </button>
           )}
           <button
             type="button"
             onClick={() => void handleSignOut()}
-            className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-2xl text-xs font-medium bg-[#12121A] hover:bg-[#1E1E28] border border-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
+            className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-2xl text-xs font-medium bg-black hover:border-[#BF5AF2] border border-[#A855F7]/30 text-white/80 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
           >
-            <LogOut className="w-3.5 h-3.5 text-rose-400" />
+            <LogOut className="w-3.5 h-3.5 text-[#BF5AF2]" />
             <span>{authUser ? t.signOut : 'Exit Guest'}</span>
           </button>
         </div>
@@ -2724,7 +2868,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => updateUserPreferences({ plan: 'premium' })}
-            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-white nova-btn-glow transition-all whitespace-nowrap cursor-pointer"
+            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap cursor-pointer"
           >
             <Crown className="w-3.5 h-3.5" />
             <span>{t.upgradeToPremium}</span>
@@ -2736,20 +2880,20 @@ export default function App() {
 
   if (!authReady) {
     return (
-      <div className="min-h-[100dvh] w-full bg-[#06070B] text-white flex flex-col items-center justify-center gap-5">
+      <div className="min-h-[100dvh] w-full bg-black text-white flex flex-col items-center justify-center gap-5">
         <div className="relative flex items-center justify-center w-28 h-28">
-          <div className="absolute inset-0 rounded-full bg-sky-400/30 blur-2xl animate-pulse" />
+          <div className="absolute inset-0 rounded-full bg-[#BF5AF2]/35 blur-2xl animate-pulse" />
           <div
-            className="relative w-20 h-20 rounded-full border border-white/70 shadow-[0_0_50px_rgba(56,189,248,0.8)] flex items-center justify-center"
+            className="relative w-20 h-20 rounded-full border border-[#BF5AF2]/75 shadow-[0_0_52px_rgba(191,90,242,0.85)] flex items-center justify-center"
             style={{
               background:
-                'radial-gradient(circle at 35% 30%, #FFFFFF 0%, #E0F2FE 25%, #38BDF8 60%, #2563EB 86%, #1E3A8A 100%)',
+                'radial-gradient(circle at 35% 30%, #FFFFFF 0%, #E9D5FF 24%, #BF5AF2 58%, #A855F7 84%, #000000 100%)',
             }}
           >
             <NovaLogo size={28} glow={false} />
           </div>
         </div>
-        <p className="text-xs text-sky-200/80 tracking-wide">Starting Nova...</p>
+        <p className="text-xs text-white/80 tracking-wide">Starting Nova...</p>
       </div>
     );
   }
@@ -2765,7 +2909,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-[100dvh] w-full bg-[#0A0A0F] text-white overflow-hidden relative">
+    <div className="flex h-[100dvh] w-full bg-black text-white overflow-hidden relative">
       {wallpaperState.appliedAsBackground && wallpaperState.currentImageUrl && (
         <img
           src={wallpaperState.currentImageUrl}
@@ -2783,7 +2927,7 @@ export default function App() {
       {mobileDrawerOpen && (
         <div className="fixed inset-0 z-40 flex md:hidden">
           <div
-            className="fixed inset-0 bg-black/75 backdrop-blur-sm"
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm"
             onClick={() => setMobileDrawerOpen(false)}
           />
           <aside className="relative z-50 flex h-full min-h-0">{sidebarContent}</aside>
@@ -2794,18 +2938,18 @@ export default function App() {
       <div
         className={`flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden relative z-10 ${
           wallpaperState.appliedAsBackground && wallpaperState.currentImageUrl
-            ? 'bg-[#0A0A0F]/80'
-            : 'bg-[#0A0A0F]'
+            ? 'bg-black/80'
+            : 'bg-black'
         }`}
       >
-        {/* Top Bar: Left = Nova name + Star icon | Right = Share + Voice + Premium */}
-        <header className="flex items-center justify-between gap-4 px-4 sm:px-6 py-3.5 border-b border-white/8 bg-[#0A0A0F]/90 backdrop-blur-sm shrink-0">
+        {/* Top Bar: Left = Nova name + Glowing Logo | Right = Share + Voice + Premium */}
+        <header className="flex items-center justify-between gap-4 px-4 sm:px-6 py-3.5 border-b border-[#A855F7]/30 bg-black/95 backdrop-blur-sm shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <button
               type="button"
               onClick={() => setMobileDrawerOpen(true)}
               aria-label="Open menu"
-              className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-white/5 md:hidden cursor-pointer shrink-0"
+              className="p-2 rounded-xl text-white/80 hover:text-white hover:bg-[#0A0A0A] md:hidden cursor-pointer shrink-0"
             >
               <Menu className="w-5 h-5" />
             </button>
@@ -2815,7 +2959,7 @@ export default function App() {
                 type="button"
                 onClick={() => setSidebarOpen(true)}
                 aria-label="Expand sidebar"
-                className="hidden md:inline-flex p-2 rounded-xl text-slate-300 hover:text-white hover:bg-white/5 cursor-pointer shrink-0"
+                className="hidden md:inline-flex p-2 rounded-xl text-white/80 hover:text-white hover:bg-[#0A0A0A] cursor-pointer shrink-0"
               >
                 <PanelLeftOpen className="w-4 h-4" />
               </button>
@@ -2826,7 +2970,7 @@ export default function App() {
               onClick={handleNewChat}
               className="flex items-center gap-2 cursor-pointer shrink-0"
             >
-              <NovaLogo size={26} glow={false} />
+              <NovaLogo size={26} glow={true} />
               <span className="text-base font-semibold text-white whitespace-nowrap">
                 {t.appName}
               </span>
@@ -2837,18 +2981,18 @@ export default function App() {
             <button
               type="button"
               onClick={() => setShareModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-medium bg-[#1A1A22] border border-white/10 text-white hover:border-purple-500/45 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-medium bg-[#0A0A0A] border border-[#A855F7]/40 text-white hover:border-[#BF5AF2] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              <Share2 className="w-3.5 h-3.5 text-purple-300" />
+              <Share2 className="w-3.5 h-3.5 text-[#BF5AF2]" />
               <span>Share Nova</span>
             </button>
 
             <button
               type="button"
               onClick={() => setVoiceModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-medium bg-[#1A1A22] border border-purple-500/35 text-white hover:border-purple-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap shrink-0 cursor-pointer"
             >
-              <AudioLines className="w-3.5 h-3.5 text-purple-400" />
+              <AudioLines className="w-3.5 h-3.5" />
               <span>{t.voiceShort}</span>
             </button>
 
@@ -2859,7 +3003,7 @@ export default function App() {
                   ? setActiveView('profile')
                   : updateUserPreferences({ plan: 'premium' })
               }
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-white nova-btn-glow transition-all whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Crown className="w-3.5 h-3.5" />
               <span>{t.premiumShort}</span>
@@ -2870,7 +3014,7 @@ export default function App() {
               onClick={() => setRightMenuOpen(true)}
               aria-label="Open Nova menu"
               title="Open Nova menu"
-              className="inline-flex items-center justify-center w-9 h-9 rounded-2xl bg-[#1A1A22] border border-white/10 text-slate-200 hover:text-white hover:border-purple-500/45 transition-colors shrink-0 cursor-pointer"
+              className="inline-flex items-center justify-center w-9 h-9 rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/35 text-white hover:border-[#BF5AF2] transition-colors shrink-0 cursor-pointer"
             >
               <Menu className="w-4 h-4" />
             </button>
@@ -2880,15 +3024,15 @@ export default function App() {
         {/* Welcome Toast after Google/Email Login */}
         {welcomeBanner && (
           <div className="mx-auto mt-2 px-4 w-full max-w-[800px] shrink-0">
-            <div className="flex items-center justify-between gap-3 rounded-2xl bg-sky-500/15 border border-sky-400/40 px-4 py-2 text-xs text-sky-100">
+            <div className="flex items-center justify-between gap-3 rounded-2xl bg-[#0A0A0A] border border-[#BF5AF2]/60 nova-glow-box px-4 py-2 text-xs text-white">
               <div className="flex items-center gap-2">
-                <Check className="w-4 h-4 text-sky-300 shrink-0" />
+                <Check className="w-4 h-4 text-[#BF5AF2] shrink-0" />
                 <span className="font-medium">{welcomeBanner}</span>
               </div>
               <button
                 type="button"
                 onClick={() => setWelcomeBanner(null)}
-                className="p-1 text-sky-200 hover:text-white cursor-pointer"
+                className="p-1 text-white/70 hover:text-white cursor-pointer"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -2932,16 +3076,21 @@ export default function App() {
             onUpdateState={updateWallpaperState}
             onGenerateWallpaper={handleGenerateWallpaper}
             isGenerating={isGeneratingWallpaper}
+            errorMessage={wallpaperError}
             onBackToChat={() => setActiveView('chat')}
           />
         ) : activeView === 'images' ? (
           <ImagesGalleryView
             images={allHistoryImages}
             activeMode={studioMode}
+            genMode={imageGenMode}
+            onChangeGenMode={handleChangeImageGenMode}
             onSelectMode={setStudioMode}
             onGenerateStudioImage={handleGenerateStudioImage}
             onCreateVariations={handleCreateVariations}
             isGenerating={isGeneratingImage || isSending}
+            errorMessage={imageStudioError}
+            onClearError={() => setImageStudioError(null)}
             onOpenChat={(chatId) => {
               setActiveChatId(chatId);
               setActiveView('chat');
@@ -2968,14 +3117,14 @@ export default function App() {
                 <div className="min-h-full flex flex-col items-center justify-center pb-8">
                   <div className="w-full max-w-4xl flex flex-col items-center text-center space-y-6">
                     <div className="space-y-3 flex flex-col items-center">
-                      <NovaLogo size={52} />
+                      <NovaLogo size={54} glow={true} />
                       <h1
                         className="text-2xl sm:text-4xl font-semibold text-white tracking-tight max-w-xl"
                         style={{ textWrap: 'balance' }}
                       >
                         {t.heroTitle}
                       </h1>
-                      <p className="text-sm sm:text-base text-slate-400 max-w-lg">
+                      <p className="text-sm sm:text-base text-white/65 max-w-lg">
                         {t.heroSubtitle}
                       </p>
                     </div>
@@ -2986,17 +3135,17 @@ export default function App() {
                           key={idx}
                           type="button"
                           onClick={() => void sendPrompt(card.prompt, card.isImage)}
-                          className="group rounded-2xl bg-[#12121A] border border-white/8 hover:border-purple-500/45 px-4 py-3.5 text-start transition-all cursor-pointer"
+                          className="group rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/30 hover:border-[#BF5AF2] hover:shadow-[0_0_24px_-10px_rgba(191,90,242,0.55)] px-4 py-3.5 text-start transition-all cursor-pointer"
                         >
                           <div className="flex items-center justify-between gap-2">
                             <span className="text-sm font-medium text-white">
                               {card.title}
                             </span>
                             {card.isImage && (
-                              <ImageIcon className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                              <ImageIcon className="w-3.5 h-3.5 text-[#BF5AF2] shrink-0" />
                             )}
                           </div>
-                          <p className="text-xs text-slate-400 mt-1 line-clamp-1">
+                          <p className="text-xs text-white/60 mt-1 line-clamp-1">
                             {card.prompt}
                           </p>
                         </button>
@@ -3037,6 +3186,11 @@ export default function App() {
                       voiceSpeed={voiceSpeed}
                       isStreaming={!isGeneratingImage}
                       isCreatingImage={isGeneratingImage}
+                      imageLoadingText={
+                        imageGenMode === 'real-photo'
+                          ? 'Generating real photo...'
+                          : 'Generating AI art...'
+                      }
                     />
                   )}
 
@@ -3045,7 +3199,7 @@ export default function App() {
               )}
             </main>
 
-            <footer className="shrink-0 border-t border-white/8 bg-[#0A0A0F]/95 backdrop-blur-sm px-3 sm:px-6 pt-2 pb-2.5 z-20">
+            <footer className="shrink-0 border-t border-[#A855F7]/25 bg-black/95 backdrop-blur-sm px-3 sm:px-6 pt-2 pb-2.5 z-20">
               {renderComposer()}
             </footer>
           </>
@@ -3083,33 +3237,33 @@ export default function App() {
 
       {/* Chat-triggered Contacts Permission Popup */}
       {callPermissionPrompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4">
-          <div className="w-full max-w-md rounded-2xl bg-[#1A1A22] border border-purple-500/35 p-6 shadow-[0_0_60px_-15px_rgba(168,85,247,0.6)] space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+          <div className="w-full max-w-md rounded-2xl bg-[#0A0A0A] border border-[#BF5AF2]/60 p-6 shadow-[0_0_60px_-15px_rgba(191,90,242,0.7)] space-y-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-purple-600/25 border border-purple-500/40 flex items-center justify-center shrink-0">
-                <Phone className="w-5 h-5 text-purple-300" />
+              <div className="w-10 h-10 rounded-2xl bg-[#A855F7]/20 border border-[#BF5AF2]/50 flex items-center justify-center shrink-0">
+                <Phone className="w-5 h-5 text-[#BF5AF2]" />
               </div>
               <h2 className="text-base font-semibold text-white">
                 Allow Nova to access contacts to make calls?
               </h2>
             </div>
 
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Nova only checks your saved contacts to display a Call Card with a green Call button. Nova will never place a call automatically without your tap.
+            <p className="text-xs text-white/75 leading-relaxed">
+              Nova only checks your saved contacts to display a Call Card with a Call button. Nova will never place a call automatically without your tap.
             </p>
 
             <div className="flex items-center justify-end gap-2.5 pt-2">
               <button
                 type="button"
                 onClick={() => setCallPermissionPrompt(null)}
-                className="px-4 py-2 rounded-2xl text-xs font-medium bg-white/8 hover:bg-white/14 text-slate-200 cursor-pointer"
+                className="px-4 py-2 rounded-2xl text-xs font-medium bg-black border border-white/20 text-white hover:border-[#BF5AF2] cursor-pointer"
               >
                 Not Now
               </button>
               <button
                 type="button"
                 onClick={handleGrantContactsPermission}
-                className="px-4 py-2 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-white nova-btn-glow cursor-pointer"
+                className="px-4 py-2 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow cursor-pointer"
               >
                 Allow Access
               </button>

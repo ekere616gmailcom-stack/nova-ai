@@ -68,20 +68,20 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
   );
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-4 sm:px-8 py-6 sm:py-10 bg-[#0A0A0F]">
+    <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-4 sm:px-8 py-6 sm:py-10 bg-black">
       <div className="max-w-[800px] mx-auto space-y-6">
         <div className="flex items-center justify-between gap-4">
           <button
             type="button"
             onClick={onBackToChat}
-            className="inline-flex items-center gap-2 text-sm font-medium text-purple-300 hover:text-white transition-colors cursor-pointer"
+            className="inline-flex items-center gap-2 text-sm font-medium text-[#BF5AF2] hover:text-white transition-colors cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>Back to Chat</span>
           </button>
 
           {permissionGranted ? (
-            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-400">
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#BF5AF2]">
               <ShieldCheck className="w-4 h-4" />
               <span>Contacts access allowed</span>
             </span>
@@ -89,7 +89,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
             <button
               type="button"
               onClick={() => setShowPermissionPrompt(true)}
-              className="px-3.5 py-2 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-white nova-btn-glow cursor-pointer"
+              className="px-3.5 py-2 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow cursor-pointer"
             >
               Allow Contacts Access
             </button>
@@ -100,7 +100,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
           <h1 className="text-2xl sm:text-3xl font-semibold text-white tracking-tight">
             Contacts
           </h1>
-          <p className="text-sm text-slate-400 mt-1.5">
+          <p className="text-sm text-white/65 mt-1.5">
             Save phone contacts so you can type “Call Mama” or “Call John” in Nova chat. Nova always lets you tap Call before dialing.
           </p>
         </div>
@@ -108,10 +108,10 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
         {/* Add Contact Form */}
         <form
           onSubmit={(e) => void handleSubmit(e)}
-          className="rounded-2xl bg-[#1A1A22] border border-white/10 p-5 space-y-4"
+          className="rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/35 p-5 space-y-4"
         >
           <div className="flex items-center gap-2 text-sm font-semibold text-white">
-            <UserPlus className="w-4 h-4 text-purple-400" />
+            <UserPlus className="w-4 h-4 text-[#BF5AF2]" />
             <span>Add New Contact</span>
           </div>
 
@@ -121,43 +121,43 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Name (e.g. Mama)"
-              className="rounded-2xl bg-[#0A0A0F] border border-white/10 px-4 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-400"
+              className="rounded-2xl bg-black border border-[#A855F7]/30 px-4 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-[#BF5AF2]"
             />
             <input
               type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder="Phone (e.g. 08031234567)"
-              className="rounded-2xl bg-[#0A0A0F] border border-white/10 px-4 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-400"
+              className="rounded-2xl bg-black border border-[#A855F7]/30 px-4 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-[#BF5AF2]"
             />
             <button
               type="submit"
               disabled={saving}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-white nova-btn-glow transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap"
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap"
             >
               <Plus className="w-4 h-4" />
               <span>{saving ? 'Saving...' : 'Save Contact'}</span>
             </button>
           </div>
 
-          {formError && <p className="text-xs text-rose-400">{formError}</p>}
+          {formError && <p className="text-xs text-[#BF5AF2]">{formError}</p>}
         </form>
 
         {/* Search & Contacts List */}
         <div className="space-y-3">
           <div className="relative">
-            <Search className="w-4 h-4 text-slate-500 absolute start-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <Search className="w-4 h-4 text-[#A855F7] absolute start-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search contacts..."
-              className="w-full rounded-2xl bg-[#12121A] border border-white/10 ps-10 pe-4 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-500/50"
+              className="w-full rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/30 ps-10 pe-4 py-2.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-[#BF5AF2]"
             />
           </div>
 
           {filtered.length === 0 ? (
-            <div className="rounded-2xl bg-[#12121A] border border-white/8 p-8 text-center text-sm text-slate-400">
+            <div className="rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/25 p-8 text-center text-sm text-white/65">
               No contacts saved yet. Add someone above (for example, Mama · 0803...) and type “Call Mama” in chat.
             </div>
           ) : (
@@ -165,17 +165,17 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
               {filtered.map((contact) => (
                 <div
                   key={contact.id}
-                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl bg-[#1A1A22] border border-white/10 px-4 py-3.5"
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/30 px-4 py-3.5"
                 >
                   <div className="flex items-center gap-3.5 min-w-0">
-                    <div className="w-10 h-10 rounded-2xl bg-purple-600/20 border border-purple-500/35 flex items-center justify-center text-sm font-semibold text-purple-200 shrink-0">
+                    <div className="w-10 h-10 rounded-2xl bg-[#A855F7]/20 border border-[#BF5AF2]/50 flex items-center justify-center text-sm font-semibold text-white shrink-0">
                       {contact.name.slice(0, 1).toUpperCase()}
                     </div>
                     <div className="min-w-0">
                       <div className="text-sm font-semibold text-white truncate">
                         {contact.name}
                       </div>
-                      <div className="text-xs font-mono tabular-nums text-slate-400">
+                      <div className="text-xs font-mono tabular-nums text-white/70">
                         {contact.phone}
                       </div>
                     </div>
@@ -185,14 +185,14 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                     <button
                       type="button"
                       onClick={() => onAskCallInChat(contact)}
-                      className="px-3 py-2 rounded-2xl text-xs font-medium bg-white/6 hover:bg-white/12 text-slate-200 transition-colors cursor-pointer whitespace-nowrap"
+                      className="px-3 py-2 rounded-2xl text-xs font-medium bg-black border border-[#A855F7]/30 hover:border-[#BF5AF2] text-white transition-colors cursor-pointer whitespace-nowrap"
                     >
                       Open Call Card
                     </button>
 
                     <a
                       href={`tel:${contact.phone.replace(/\s+/g, '')}`}
-                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors whitespace-nowrap"
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap"
                     >
                       <Phone className="w-3.5 h-3.5" />
                       <span>Call</span>
@@ -202,7 +202,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                       type="button"
                       onClick={() => void onDeleteContact(contact.id)}
                       aria-label={`Delete ${contact.name}`}
-                      className="p-2 rounded-2xl text-slate-400 hover:text-rose-400 hover:bg-white/5 transition-colors cursor-pointer"
+                      className="p-2 rounded-2xl text-white/60 hover:text-[#BF5AF2] hover:bg-black transition-colors cursor-pointer"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -216,26 +216,26 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
 
       {/* Contacts Permission Popup */}
       {showPermissionPrompt && !permissionGranted && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4">
-          <div className="w-full max-w-md rounded-2xl bg-[#1A1A22] border border-purple-500/35 p-6 shadow-[0_0_60px_-15px_rgba(168,85,247,0.6)] space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+          <div className="w-full max-w-md rounded-2xl bg-[#0A0A0A] border border-[#BF5AF2]/60 p-6 shadow-[0_0_60px_-15px_rgba(191,90,242,0.7)] space-y-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-purple-600/25 border border-purple-500/40 flex items-center justify-center shrink-0">
-                <Phone className="w-5 h-5 text-purple-300" />
+              <div className="w-10 h-10 rounded-2xl bg-[#A855F7]/20 border border-[#BF5AF2]/50 flex items-center justify-center shrink-0">
+                <Phone className="w-5 h-5 text-[#BF5AF2]" />
               </div>
               <h2 className="text-base font-semibold text-white">
                 Allow Nova to access contacts to make calls?
               </h2>
             </div>
 
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Nova only uses your saved contacts to show a Call Card when you ask to call someone. Nova will never place a call automatically without you tapping the green Call button.
+            <p className="text-xs text-white/75 leading-relaxed">
+              Nova only uses your saved contacts to show a Call Card when you ask to call someone. Nova will never place a call automatically without you tapping the Call button.
             </p>
 
             <div className="flex items-center justify-end gap-2.5 pt-2">
               <button
                 type="button"
                 onClick={() => setShowPermissionPrompt(false)}
-                className="px-4 py-2 rounded-2xl text-xs font-medium bg-white/8 hover:bg-white/14 text-slate-200 cursor-pointer"
+                className="px-4 py-2 rounded-2xl text-xs font-medium bg-black border border-white/20 text-white hover:border-[#BF5AF2] cursor-pointer"
               >
                 Not Now
               </button>
@@ -245,7 +245,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                   onGrantPermission();
                   setShowPermissionPrompt(false);
                 }}
-                className="px-4 py-2 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-white nova-btn-glow cursor-pointer"
+                className="px-4 py-2 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow cursor-pointer"
               >
                 Allow Access
               </button>

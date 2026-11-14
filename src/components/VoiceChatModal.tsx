@@ -345,15 +345,15 @@ export const VoiceChatModal: React.FC<VoiceChatModalProps> = ({
             : 'Listening — speak English, Pidgin, Yoruba, Igbo, Hausa & more';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/88 backdrop-blur-xl p-4 overflow-y-auto">
-      <div className="w-full max-w-lg rounded-3xl bg-[#090B14] border border-sky-400/25 p-6 sm:p-7 shadow-[0_0_90px_-15px_rgba(56,189,248,0.45)] flex flex-col items-center text-center my-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-xl p-4 overflow-y-auto">
+      <div className="w-full max-w-lg rounded-3xl bg-[#0A0A0A] border border-[#BF5AF2]/40 p-6 sm:p-7 shadow-[0_0_80px_-15px_rgba(191,90,242,0.55)] flex flex-col items-center text-center my-auto">
         {/* Top Row */}
         <div className="flex items-center justify-between w-full mb-3">
           <div className="flex items-center gap-2.5">
-            <NovaLogo size={26} glow={false} />
+            <NovaLogo size={26} glow={true} />
             <span className="font-display text-base font-semibold text-white">{t.voiceStudioTitle}</span>
           </div>
-          <span className="text-xs text-sky-300 font-mono">
+          <span className="text-xs text-[#BF5AF2] font-mono">
             {isFemaleVoice ? 'Female' : 'Male'} · {voiceSpeed}
           </span>
         </div>
@@ -367,8 +367,8 @@ export const VoiceChatModal: React.FC<VoiceChatModalProps> = ({
               onClick={() => setSpeechLang(chip.value)}
               className={`px-2.5 py-1 rounded-xl text-[11px] font-medium transition-colors cursor-pointer ${
                 speechLang === chip.value
-                  ? 'bg-sky-500/25 border border-sky-300 text-white'
-                  : 'bg-white/5 border border-white/10 text-slate-300 hover:text-white'
+                  ? 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] border border-[#BF5AF2] text-white nova-btn-glow'
+                  : 'bg-black border border-[#A855F7]/30 text-white/75 hover:text-white'
               }`}
             >
               {chip.label}
@@ -376,54 +376,51 @@ export const VoiceChatModal: React.FC<VoiceChatModalProps> = ({
           ))}
         </div>
 
-        {/* Big Glowing Blue-White Nova Orb in Center */}
+        {/* Big Glowing Neon Purple & White Nova Orb in Center */}
         <div className="relative flex items-center justify-center w-56 h-56 mb-5">
-          {/* Outer Atmosphere Halo */}
           <div
-            className={`absolute inset-2 rounded-full bg-sky-400/25 blur-3xl transition-transform duration-150 ${
+            className={`absolute inset-2 rounded-full bg-[#BF5AF2]/30 blur-3xl transition-transform duration-150 ${
               isTalking ? 'animate-pulse' : ''
             }`}
             style={{ transform: `scale(${orbScale * 1.2})` }}
           />
-          {/* Pulsing Ring when talking */}
           {isTalking && (
             <div
-              className="absolute inset-6 rounded-full border-2 border-sky-300/45 animate-ping"
-              style={{ animationDuration: '1.6s' }}
+              className="absolute inset-6 rounded-full border-2 border-[#BF5AF2]/60 animate-ping"
+              style={{ animationDuration: '1.4s' }}
             />
           )}
-          {/* Radiant Blue-White Core Orb */}
           <div
-            className="relative flex items-center justify-center w-40 h-40 rounded-full border border-white/65 shadow-[0_0_65px_rgba(56,189,248,0.85),inset_0_0_32px_rgba(255,255,255,0.85)] transition-transform duration-150"
+            className="relative flex items-center justify-center w-40 h-40 rounded-full border border-[#BF5AF2] shadow-[0_0_65px_rgba(191,90,242,0.85),inset_0_0_32px_rgba(255,255,255,0.85)] transition-transform duration-150"
             style={{
               transform: `scale(${orbScale})`,
               background:
-                'radial-gradient(circle at 35% 30%, #FFFFFF 0%, #E0F2FE 22%, #38BDF8 55%, #2563EB 82%, #1E3A8A 100%)',
+                'radial-gradient(circle at 35% 30%, #FFFFFF 0%, #F3E8FF 22%, #BF5AF2 55%, #A855F7 82%, #000000 100%)',
             }}
           >
             {status === 'speaking' ? (
-              <Volume2 className="w-11 h-11 text-sky-950 drop-shadow" />
+              <Volume2 className="w-11 h-11 text-black drop-shadow" />
             ) : isMuted ? (
-              <MicOff className="w-11 h-11 text-sky-950/70" />
+              <MicOff className="w-11 h-11 text-black/75" />
             ) : (
-              <Mic className="w-11 h-11 text-sky-950 drop-shadow" />
+              <Mic className="w-11 h-11 text-black drop-shadow" />
             )}
           </div>
         </div>
 
-        <p className={`text-sm font-medium mb-4 ${status === 'error' ? 'text-slate-300' : 'text-sky-200'}`}>
+        <p className={`text-sm font-medium mb-4 ${status === 'error' ? 'text-white/70' : 'text-white'}`}>
           {statusText}
         </p>
 
         {/* Live Transcript Preview */}
         {transcripts.length > 0 && (
-          <div className="w-full max-h-36 overflow-y-auto rounded-2xl bg-[#101526] border border-sky-400/15 p-3.5 mb-5 text-start space-y-2">
+          <div className="w-full max-h-36 overflow-y-auto rounded-2xl bg-black border border-[#A855F7]/30 p-3.5 mb-5 text-start space-y-2">
             {transcripts.map((entry) => (
               <div key={entry.id} className="text-xs leading-relaxed">
-                <span className={`font-semibold ${entry.speaker === 'nova' ? 'text-sky-300' : 'text-slate-400'}`}>
+                <span className={`font-semibold ${entry.speaker === 'nova' ? 'text-[#BF5AF2]' : 'text-white/60'}`}>
                   {entry.speaker === 'nova' ? t.novaLabel : t.youLabel}:{' '}
                 </span>
-                <span className="text-slate-100">{entry.text}</span>
+                <span className="text-white">{entry.text}</span>
               </div>
             ))}
           </div>
@@ -431,14 +428,14 @@ export const VoiceChatModal: React.FC<VoiceChatModalProps> = ({
 
         {/* Quick Voice Settings: Male/Female & Slow/Fast */}
         <div className="w-full grid grid-cols-2 gap-2.5 mb-5">
-          <div className="rounded-2xl bg-[#101526] border border-white/8 p-1.5 flex items-center gap-1">
+          <div className="rounded-2xl bg-black border border-[#A855F7]/25 p-1.5 flex items-center gap-1">
             <button
               type="button"
               onClick={() => onChangeVoice('Kore')}
               className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
                 isFemaleVoice
-                  ? 'bg-sky-500/25 text-white border border-sky-400/50'
-                  : 'text-slate-400 hover:text-white'
+                  ? 'bg-[#A855F7]/30 text-white border border-[#BF5AF2]'
+                  : 'text-white/65 hover:text-white'
               }`}
             >
               Female
@@ -448,15 +445,15 @@ export const VoiceChatModal: React.FC<VoiceChatModalProps> = ({
               onClick={() => onChangeVoice('Charon')}
               className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
                 !isFemaleVoice
-                  ? 'bg-sky-500/25 text-white border border-sky-400/50'
-                  : 'text-slate-400 hover:text-white'
+                  ? 'bg-[#A855F7]/30 text-white border border-[#BF5AF2]'
+                  : 'text-white/65 hover:text-white'
               }`}
             >
               Male
             </button>
           </div>
 
-          <div className="rounded-2xl bg-[#101526] border border-white/8 p-1.5 flex items-center gap-1">
+          <div className="rounded-2xl bg-black border border-[#A855F7]/25 p-1.5 flex items-center gap-1">
             {(['slow', 'normal', 'fast'] as VoiceSpeed[]).map((sp) => (
               <button
                 key={sp}
@@ -464,8 +461,8 @@ export const VoiceChatModal: React.FC<VoiceChatModalProps> = ({
                 onClick={() => onChangeSpeed(sp)}
                 className={`flex-1 py-1.5 rounded-xl text-xs font-medium capitalize transition-colors cursor-pointer ${
                   voiceSpeed === sp
-                    ? 'bg-sky-500/25 text-white border border-sky-400/50'
-                    : 'text-slate-400 hover:text-white'
+                    ? 'bg-[#A855F7]/30 text-white border border-[#BF5AF2]'
+                    : 'text-white/65 hover:text-white'
                 }`}
               >
                 {sp}
@@ -481,8 +478,8 @@ export const VoiceChatModal: React.FC<VoiceChatModalProps> = ({
             onClick={() => setIsMuted((m) => !m)}
             className={`inline-flex items-center justify-center gap-2 px-5 py-3 rounded-2xl text-sm font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
               isMuted
-                ? 'bg-amber-500/15 border-amber-400/40 text-amber-200 hover:bg-amber-500/25'
-                : 'bg-sky-500/20 border-sky-400/40 text-white hover:bg-sky-500/30'
+                ? 'bg-white text-black border-white'
+                : 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] border-[#BF5AF2] text-white nova-btn-glow'
             }`}
           >
             {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
@@ -492,9 +489,9 @@ export const VoiceChatModal: React.FC<VoiceChatModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-2xl text-sm font-medium bg-rose-600 hover:bg-rose-500 text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-2xl text-sm font-medium bg-black border border-[#A855F7]/45 hover:border-[#BF5AF2] text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            <PhoneOff className="w-4 h-4" />
+            <PhoneOff className="w-4 h-4 text-[#BF5AF2]" />
             <span>{t.endVoiceChat}</span>
           </button>
         </div>

@@ -2,12 +2,11 @@
 
 @layer base {
   :root {
-    --nova-bg: #0a0a0f;
-    --nova-surface: #12121a;
-    --nova-ai-bubble: #1a1a22;
-    --nova-border: rgba(255, 255, 255, 0.08);
+    --nova-bg: #000000;
+    --nova-surface: #0a0a0a;
+    --nova-border: rgba(168, 85, 247, 0.32);
     --nova-accent: #a855f7;
-    --nova-accent-strong: #7c3aed;
+    --nova-accent-neon: #bf5af2;
   }
 
   html,
@@ -15,7 +14,7 @@
   #root {
     min-height: 100%;
     height: 100%;
-    background-color: #0a0a0f;
+    background-color: #000000;
     color: #ffffff;
     font-family: "Inter", system-ui, -apple-system, sans-serif;
     -webkit-overflow-scrolling: touch;
@@ -28,50 +27,58 @@
   }
 }
 
-/* Subtle custom scrollbars */
+/* Subtle neon purple custom scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: #000000;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(168, 85, 247, 0.24);
+  background: rgba(168, 85, 247, 0.35);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(168, 85, 247, 0.45);
+  background: rgba(191, 90, 242, 0.65);
 }
 
-/* Purple neon glow utilities */
+/* Neon purple glow utilities */
 .nova-glow-box {
   box-shadow:
-    0 0 0 1px rgba(168, 85, 247, 0.26),
-    0 0 36px -12px rgba(124, 58, 237, 0.42),
-    0 16px 40px -20px rgba(0, 0, 0, 0.9);
+    0 0 0 1px rgba(168, 85, 247, 0.35),
+    0 0 28px -10px rgba(191, 90, 242, 0.45),
+    0 16px 40px -20px rgba(0, 0, 0, 0.95);
 }
 
 .nova-glow-box:focus-within {
   box-shadow:
-    0 0 0 1px rgba(168, 85, 247, 0.65),
-    0 0 46px -8px rgba(168, 85, 247, 0.55),
-    0 18px 44px -18px rgba(0, 0, 0, 0.95);
+    0 0 0 1px rgba(191, 90, 242, 0.78),
+    0 0 42px -8px rgba(191, 90, 242, 0.65),
+    0 18px 44px -18px rgba(0, 0, 0, 0.98);
 }
 
 .nova-btn-glow {
   box-shadow:
-    0 0 22px -4px rgba(168, 85, 247, 0.65),
-    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+    0 0 20px -3px rgba(168, 85, 247, 0.72),
+    0 0 10px -2px rgba(191, 90, 242, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
 .nova-btn-glow:hover {
   box-shadow:
-    0 0 30px -2px rgba(168, 85, 247, 0.85),
-    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+    0 0 28px -1px rgba(191, 90, 242, 0.9),
+    0 0 14px -1px rgba(168, 85, 247, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.32);
+}
+
+.nova-active-glow {
+  box-shadow:
+    0 0 22px -6px rgba(191, 90, 242, 0.75),
+    inset 0 0 0 1px rgba(191, 90, 242, 0.45);
 }
 
 /* 3-dot typing indicator */
@@ -112,7 +119,7 @@
   vertical-align: -0.15em;
   margin-inline-start: 3px;
   border-radius: 2px;
-  background-color: #c084fc;
+  background-color: #bf5af2;
   animation: novaCursorBlink 0.7s infinite;
 }
 
@@ -133,8 +140,8 @@
   background: linear-gradient(
     90deg,
     transparent,
-    rgba(168, 85, 247, 0.18),
-    rgba(255, 255, 255, 0.08),
+    rgba(168, 85, 247, 0.22),
+    rgba(191, 90, 242, 0.14),
     transparent
   );
   animation: novaShimmer 1.6s infinite;
@@ -200,7 +207,7 @@
 }
 
 .nova-prose a {
-  color: #c084fc;
+  color: #bf5af2;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -208,15 +215,15 @@
 .nova-prose code {
   font-family: "JetBrains Mono", monospace;
   font-size: 0.84em;
-  background: rgba(168, 85, 247, 0.16);
-  color: #f3e8ff;
+  background: rgba(168, 85, 247, 0.18);
+  color: #ffffff;
   padding: 0.15em 0.4em;
   border-radius: 0.35rem;
 }
 
 .nova-prose pre {
-  background: #0a0a0f;
-  border: 1px solid rgba(168, 85, 247, 0.24);
+  background: #000000;
+  border: 1px solid rgba(168, 85, 247, 0.35);
   border-radius: 0.75rem;
   padding: 0.9rem 1rem;
   overflow-x: auto;
@@ -226,15 +233,15 @@
 .nova-prose pre code {
   background: transparent;
   padding: 0;
-  color: #f3e8ff;
+  color: #ffffff;
   font-size: 0.83rem;
   line-height: 1.6;
 }
 
 .nova-prose blockquote {
-  border-inline-start: 2px solid rgba(168, 85, 247, 0.6);
+  border-inline-start: 2px solid #bf5af2;
   padding-inline-start: 0.9rem;
-  color: #e9d5ff;
+  color: rgba(255, 255, 255, 0.85);
   margin: 0.8rem 0;
 }
 
@@ -247,13 +254,13 @@
 
 .nova-prose th,
 .nova-prose td {
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(168, 85, 247, 0.25);
   padding: 0.5rem 0.75rem;
   text-align: start;
 }
 
 .nova-prose th {
-  background: rgba(168, 85, 247, 0.15);
+  background: rgba(168, 85, 247, 0.18);
   color: #ffffff;
   font-weight: 600;
 }
