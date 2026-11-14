@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -102,6 +102,44 @@ const VOICE_SPEED_KEY = 'nova_voice_speed_v1';
 const MEMORY_PREFIX = 'nova_memory_v1_';
 const CONTACTS_PERMISSION_PREFIX = 'nova_contacts_permission_v1_';
 const WALLPAPER_STATE_PREFIX = 'nova_wallpaper_state_v1_';
+const REPLY_CACHE_KEY = 'nova_reply_cache_v1';
+const REPLY_CACHE_LIMIT = 30;
+
+function loadReplyCache(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(REPLY_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const clean: Record<string, string> = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === 'string' && v.trim()) clean[k] = v;
+      }
+      return clean;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return {};
+}
+
+function getClientReplyCacheKey(
+  prompt: string,
+  language: LanguageCode,
+  hasAttachment: boolean,
+  hasPriorHistory: boolean
+): string | null {
+  if (hasAttachment || hasPriorHistory) return null;
+  const clean = prompt.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!clean || clean.length > 220) return null;
+  if (
+    /\b(today|now|current|time|date|weather|news|random|roll|flip|remember|my\s+name|my\s+school|my\s+business)\b/i.test(
+      clean
+    )
+  ) {
+    return null;
+  }
+  return `${language}:${clean}`;
+}
 
 const DEFAULT_MEMORY: NovaMemory = {
   name: '',
@@ -504,6 +542,9 @@ export default function App() {
     () => loadGuestWorkspace().savedImages
   );
   const [firestoreMessages, setFirestoreMessages] = useState<ChatMessage[]>([]);
+  const [optimisticMessagesByChat, setOptimisticMessagesByChat] = useState<
+    Record<string, ChatMessage[]>
+  >({});
 
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>('chat');
@@ -530,6 +571,7 @@ export default function App() {
   const [streamingContent, setStreamingContent] = useState<string>('');
   const [voiceHint, setVoiceHint] = useState<string | null>(null);
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const replyCacheRef = useRef<Record<string, string>>(loadReplyCache());
 
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -850,9 +892,24 @@ export default function App() {
 
   const activeMessages = useMemo(() => {
     if (!activeChatId) return [];
-    if (canUseFirestore) return firestoreMessages;
-    return guestMessagesByChat[activeChatId] || [];
-  }, [activeChatId, canUseFirestore, firestoreMessages, guestMessagesByChat]);
+    const base = canUseFirestore
+      ? firestoreMessages
+      : guestMessagesByChat[activeChatId] || [];
+    const pending = optimisticMessagesByChat[activeChatId] || [];
+    if (pending.length === 0) return base;
+    const seen = new Set(base.map((m) => m.id));
+    const merged = [...base];
+    for (const p of pending) {
+      if (!seen.has(p.id)) merged.push(p);
+    }
+    return merged.sort((a, b) => a.createdAtMs - b.createdAtMs);
+  }, [
+    activeChatId,
+    canUseFirestore,
+    firestoreMessages,
+    guestMessagesByChat,
+    optimisticMessagesByChat,
+  ]);
 
   const activeContacts = canUseFirestore ? firestoreContacts : guestContacts;
 
@@ -921,7 +978,7 @@ export default function App() {
   }, [chats, searchQuery]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
   }, [activeChatId, activeMessages.length, streamingContent, isGeneratingImage, isSending]);
 
   useEffect(() => {
@@ -929,9 +986,7 @@ export default function App() {
     if (!vv) return;
     const handleViewportResize = () => {
       if (activeMessages.length > 0) {
-        setTimeout(() => {
-          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        }, 80);
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
       }
     };
     vv.addEventListener('resize', handleViewportResize);
@@ -1045,7 +1100,7 @@ export default function App() {
     setVoiceHint(null);
     setStreamingContent('');
     setMobileDrawerOpen(false);
-    setTimeout(() => heroInputRef.current?.focus(), 50);
+    heroInputRef.current?.focus();
   };
 
   const storageUidKey = authUser ? authUser.uid : 'guest';
@@ -1286,8 +1341,55 @@ export default function App() {
     }
   };
 
-  const ensureChatSession = async (firstPrompt: string): Promise<string> => {
-    if (activeChatId) return activeChatId;
+  const saveClientReplyCache = useCallback((cacheKey: string, replyText: string) => {
+    if (!replyText.trim() || replyText.length > 4000) return;
+    const next = { ...replyCacheRef.current };
+    delete next[cacheKey];
+    next[cacheKey] = replyText;
+    const keys = Object.keys(next);
+    if (keys.length > REPLY_CACHE_LIMIT) {
+      for (const oldKey of keys.slice(0, keys.length - REPLY_CACHE_LIMIT)) {
+        delete next[oldKey];
+      }
+    }
+    replyCacheRef.current = next;
+    try {
+      localStorage.setItem(REPLY_CACHE_KEY, JSON.stringify(next));
+    } catch {
+      // ignore storage quota errors
+    }
+  }, []);
+
+  const appendOptimisticMessage = useCallback(
+    (chatId: string, msg: ChatMessage) => {
+      setOptimisticMessagesByChat((prev) => ({
+        ...prev,
+        [chatId]: [...(prev[chatId] || []), msg],
+      }));
+    },
+    []
+  );
+
+  const removeOptimisticMessage = useCallback((chatId: string, msgId: string) => {
+    setOptimisticMessagesByChat((prev) => {
+      const list = prev[chatId];
+      if (!list || list.length === 0) return prev;
+      const filtered = list.filter((m) => m.id !== msgId);
+      if (filtered.length === 0) {
+        const next = { ...prev };
+        delete next[chatId];
+        return next;
+      }
+      return { ...prev, [chatId]: filtered };
+    });
+  }, []);
+
+  const ensureChatSessionSync = (
+    firstPrompt: string
+  ): { chatId: string; persistPromise: Promise<void> } => {
+    if (activeChatId) {
+      return { chatId: activeChatId, persistPromise: Promise.resolve() };
+    }
 
     const newChatId = createId('chat');
     const title = firstPrompt.trim().slice(0, 64) || t.newChat;
@@ -1303,37 +1405,44 @@ export default function App() {
       };
       setChats((prev) => [session, ...prev]);
       setActiveChatId(newChatId);
-      return newChatId;
+      return { chatId: newChatId, persistPromise: Promise.resolve() };
     }
 
     const uid = authUser.uid;
     const chatPath = `users/${uid}/chats/${newChatId}`;
-    try {
-      await setDoc(doc(db, 'users', uid, 'chats', newChatId), {
-        userId: uid,
-        title,
-        lastMessagePreview: preview,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      setActiveChatId(newChatId);
-      return newChatId;
-    } catch (err) {
+    setActiveChatId(newChatId);
+    const persistPromise = setDoc(doc(db, 'users', uid, 'chats', newChatId), {
+      userId: uid,
+      title,
+      lastMessagePreview: preview,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch((err) => {
       handleFirestoreError(err, OperationType.CREATE, chatPath);
-    }
+    });
+    return { chatId: newChatId, persistPromise };
+  };
+
+  const ensureChatSession = async (firstPrompt: string): Promise<string> => {
+    const { chatId, persistPromise } = ensureChatSessionSync(firstPrompt);
+    await persistPromise;
+    return chatId;
   };
 
   const saveMessage = async (
     chatId: string,
-    msg: Omit<ChatMessage, 'id' | 'chatId' | 'createdAtMs'>
+    msg: Omit<ChatMessage, 'id' | 'chatId' | 'createdAtMs'>,
+    customId?: string,
+    customCreatedAtMs?: number
   ): Promise<string> => {
-    const messageId = createId('msg');
+    const messageId = customId || createId('msg');
+    const createdAtMs = customCreatedAtMs ?? Date.now();
     if (!canUseFirestore || !authUser) {
       const created: ChatMessage = {
         id: messageId,
         chatId,
         ...msg,
-        createdAtMs: Date.now(),
+        createdAtMs,
       };
       setGuestMessagesByChat((prev) => ({
         ...prev,
@@ -1346,7 +1455,7 @@ export default function App() {
               ? {
                   ...c,
                   lastMessagePreview: msg.content.slice(0, 120),
-                  updatedAtMs: Date.now(),
+                  updatedAtMs: createdAtMs,
                 }
               : c
           )
@@ -1383,6 +1492,7 @@ export default function App() {
         payload.imagePrompt = msg.imagePrompt.slice(0, 1900);
       }
       await setDoc(doc(db, 'users', uid, 'chats', chatId, 'messages', messageId), payload);
+      removeOptimisticMessage(chatId, messageId);
       await updateDoc(doc(db, 'users', uid, 'chats', chatId), {
         lastMessagePreview: msg.content.slice(0, 120),
         updatedAt: serverTimestamp(),
@@ -1618,7 +1728,7 @@ export default function App() {
         // quiet recovery
       } finally {
         setIsSending(false);
-        setTimeout(() => bottomInputRef.current?.focus(), 60);
+        bottomInputRef.current?.focus();
       }
       return;
     }
@@ -1655,7 +1765,7 @@ export default function App() {
         }
       } finally {
         setIsSending(false);
-        setTimeout(() => bottomInputRef.current?.focus(), 60);
+        bottomInputRef.current?.focus();
       }
       return;
     }
@@ -1674,26 +1784,41 @@ export default function App() {
     setVoiceHint(null);
     setInputText('');
     setAttachedImage(null);
+    setStreamingContent('');
     setIsSending(true);
     setActiveView('chat');
 
-    let activeSessionId: string | null = activeChatId;
+    const { chatId, persistPromise: chatPersistPromise } = ensureChatSessionSync(effectivePrompt);
+    const activeSessionId: string | null = chatId;
+    const historyBefore = canUseFirestore ? activeMessages : guestMessagesByChat[chatId] || [];
+
+    const userMsgId = createId('msg');
+    const userCreatedAtMs = Date.now();
+    const userMsgPayload: Omit<ChatMessage, 'id' | 'chatId' | 'createdAtMs'> = {
+      role: 'user',
+      kind: useImage ? 'image' : 'text',
+      content: raw,
+      imageDataUrl: currentAttachment?.previewUrl,
+    };
+
+    let persistUserMsgPromise: Promise<unknown> = Promise.resolve();
+    if (canUseFirestore) {
+      appendOptimisticMessage(chatId, {
+        id: userMsgId,
+        chatId,
+        ...userMsgPayload,
+        createdAtMs: userCreatedAtMs,
+      });
+      persistUserMsgPromise = chatPersistPromise.then(() =>
+        saveMessage(chatId, userMsgPayload, userMsgId, userCreatedAtMs)
+      );
+    } else {
+      void saveMessage(chatId, userMsgPayload, userMsgId, userCreatedAtMs);
+    }
 
     try {
-      const chatId = await ensureChatSession(effectivePrompt);
-      activeSessionId = chatId;
-      const historyBefore = canUseFirestore
-        ? firestoreMessages
-        : guestMessagesByChat[chatId] || [];
-
-      await saveMessage(chatId, {
-        role: 'user',
-        kind: useImage ? 'image' : 'text',
-        content: raw,
-        imageDataUrl: currentAttachment?.previewUrl,
-      });
-
       if (useImage) {
+        await persistUserMsgPromise;
         await incrementUsage('image');
         await runImageGeneration(chatId, effectivePrompt, 1, currentAttachment);
         setImageMode(false);
@@ -1704,8 +1829,49 @@ export default function App() {
           saveMemoryToStorage(storageUidKey, updatedMem);
         }
 
-        await incrementUsage('chat');
-        setStreamingContent('');
+        // Non-blocking usage & cache check
+        void incrementUsage('chat');
+
+        const clientCacheKey = getClientReplyCacheKey(
+          raw,
+          profile.language,
+          Boolean(currentAttachment),
+          historyBefore.length > 0
+        );
+        const cachedAnswer = clientCacheKey ? replyCacheRef.current[clientCacheKey] : undefined;
+
+        if (cachedAnswer) {
+          const assistantMsgId = createId('msg');
+          const assistantCreatedAtMs = Date.now();
+          if (canUseFirestore) {
+            appendOptimisticMessage(chatId, {
+              id: assistantMsgId,
+              chatId,
+              role: 'assistant',
+              kind: 'text',
+              content: cachedAnswer,
+              createdAtMs: assistantCreatedAtMs,
+            });
+            void persistUserMsgPromise.then(() =>
+              saveMessage(
+                chatId,
+                { role: 'assistant', kind: 'text', content: cachedAnswer },
+                assistantMsgId,
+                assistantCreatedAtMs
+              )
+            );
+          } else {
+            void saveMessage(
+              chatId,
+              { role: 'assistant', kind: 'text', content: cachedAnswer },
+              assistantMsgId,
+              assistantCreatedAtMs
+            );
+          }
+          setStreamingContent('');
+          return;
+        }
+
         const conversationPayload = [
           ...historyBefore.map((m) => ({ role: m.role, content: m.content })),
           { role: 'user' as const, content: raw },
@@ -1726,7 +1892,8 @@ export default function App() {
         });
 
         if (!res.ok || !res.body) {
-          throw new Error('chat_unavailable');
+          const errData = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(errData.error || `Gemini request failed (HTTP ${res.status}).`);
         }
 
         const reader = res.body.getReader();
@@ -1734,14 +1901,8 @@ export default function App() {
         let accumulated = '';
         let buffer = '';
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
+        const processSseFrame = (frame: string) => {
+          for (const line of frame.split('\n')) {
             if (!line.startsWith('data: ')) continue;
             const jsonStr = line.slice(6).trim();
             if (!jsonStr) continue;
@@ -1750,38 +1911,106 @@ export default function App() {
               done?: boolean;
               error?: string;
             };
-            if (parsed.error) throw new Error('chat_unavailable');
+            if (parsed.error) {
+              throw new Error(parsed.error);
+            }
             if (parsed.text) {
               accumulated += parsed.text;
               setStreamingContent(accumulated);
             }
           }
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop() || '';
+          for (const frame of frames) {
+            processSseFrame(frame);
+          }
+        }
+        if (buffer.trim()) {
+          processSseFrame(buffer.trim());
         }
 
-        setStreamingContent('');
-        if (accumulated.trim()) {
-          await saveMessage(chatId, {
+        const finalReply =
+          accumulated.trim() || 'Gemini returned an empty response. Please try asking again.';
+        if (accumulated.trim() && clientCacheKey) {
+          saveClientReplyCache(clientCacheKey, finalReply);
+        }
+
+        const assistantMsgId = createId('msg');
+        const assistantCreatedAtMs = Date.now();
+        if (canUseFirestore) {
+          appendOptimisticMessage(chatId, {
+            id: assistantMsgId,
+            chatId,
             role: 'assistant',
             kind: 'text',
-            content: accumulated.trim(),
+            content: finalReply,
+            createdAtMs: assistantCreatedAtMs,
           });
+          void persistUserMsgPromise.then(() =>
+            saveMessage(
+              chatId,
+              { role: 'assistant', kind: 'text', content: finalReply },
+              assistantMsgId,
+              assistantCreatedAtMs
+            )
+          );
+        } else {
+          void saveMessage(
+            chatId,
+            { role: 'assistant', kind: 'text', content: finalReply },
+            assistantMsgId,
+            assistantCreatedAtMs
+          );
         }
+        setStreamingContent('');
       }
-    } catch {
+    } catch (err) {
       setStreamingContent('');
       setIsGeneratingImage(false);
+      const realError =
+        err instanceof Error && err.message.trim()
+          ? err.message.trim()
+          : String(err || 'Gemini API request failed.');
       if (activeSessionId) {
-        await saveMessage(activeSessionId, {
-          role: 'assistant',
-          kind: 'text',
-          content: useImage
-            ? "I couldn't create that image right now. Please try a different prompt or style."
-            : "Sorry, I couldn't respond right now. Please try again in a moment.",
-        }).catch(() => undefined);
+        const errMsgId = createId('msg');
+        const errCreatedAtMs = Date.now();
+        if (canUseFirestore) {
+          appendOptimisticMessage(activeSessionId, {
+            id: errMsgId,
+            chatId: activeSessionId,
+            role: 'assistant',
+            kind: 'text',
+            content: `**Gemini API Error:** ${realError}`,
+            createdAtMs: errCreatedAtMs,
+          });
+          void persistUserMsgPromise
+            .then(() =>
+              saveMessage(
+                activeSessionId,
+                { role: 'assistant', kind: 'text', content: `**Gemini API Error:** ${realError}` },
+                errMsgId,
+                errCreatedAtMs
+              )
+            )
+            .catch(() => undefined);
+        } else {
+          void saveMessage(
+            activeSessionId,
+            { role: 'assistant', kind: 'text', content: `**Gemini API Error:** ${realError}` },
+            errMsgId,
+            errCreatedAtMs
+          ).catch(() => undefined);
+        }
       }
     } finally {
       setIsSending(false);
-      setTimeout(() => bottomInputRef.current?.focus(), 60);
+      bottomInputRef.current?.focus();
     }
   };
 
@@ -1915,6 +2144,29 @@ export default function App() {
       setVoiceHint('Voice not available, type instead');
     }
   };
+
+  const stableMessageActionsRef = useRef({
+    onCreateVariations: (_prompt: string) => {},
+    onEditBuiltApp: (_instruction: string, _html: string) => {},
+    onQuickPickBuilderCategory: (_category: string) => {},
+  });
+  stableMessageActionsRef.current.onCreateVariations = (p: string) => {
+    void handleCreateVariations(p);
+  };
+  stableMessageActionsRef.current.onEditBuiltApp = (inst: string, html: string) => {
+    void handleEditBuiltApp(inst, html);
+  };
+  stableMessageActionsRef.current.onQuickPickBuilderCategory = handleQuickPickBuilderCategory;
+
+  const memoizedCreateVariations = useCallback((prompt: string) => {
+    stableMessageActionsRef.current.onCreateVariations(prompt);
+  }, []);
+  const memoizedEditBuiltApp = useCallback((instruction: string, html: string) => {
+    stableMessageActionsRef.current.onEditBuiltApp(instruction, html);
+  }, []);
+  const memoizedQuickPickBuilderCategory = useCallback((category: string) => {
+    stableMessageActionsRef.current.onQuickPickBuilderCategory(category);
+  }, []);
 
   const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -2762,9 +3014,9 @@ export default function App() {
                       voiceName={profile.voiceName}
                       voiceSpeed={voiceSpeed}
                       isEditingBuiltApp={isBuildingApp}
-                      onCreateVariations={(prompt) => void handleCreateVariations(prompt)}
-                      onEditBuiltApp={(instruction, html) => void handleEditBuiltApp(instruction, html)}
-                      onQuickPickBuilderCategory={handleQuickPickBuilderCategory}
+                      onCreateVariations={memoizedCreateVariations}
+                      onEditBuiltApp={memoizedEditBuiltApp}
+                      onQuickPickBuilderCategory={memoizedQuickPickBuilderCategory}
                     />
                   ))}
 

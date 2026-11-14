@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
-import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
+import { GoogleGenAI, LiveServerMessage, Modality, ThinkingLevel, Type } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,15 +12,129 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
 const isProd = process.env.NODE_ENV === 'production';
 
+function getGeminiApiKey(): string | undefined {
+  const candidates = [
+    process.env.GEMINI_API_KEY,
+    process.env.GOOGLE_API_KEY,
+    process.env.API_KEY,
+  ];
+  for (const val of candidates) {
+    const trimmed = val?.trim();
+    if (trimmed && trimmed !== 'MY_GEMINI_API_KEY') {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
 function createAiClient() {
   return new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
+    apiKey: getGeminiApiKey(),
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
       },
     },
   });
+}
+
+const FAST_TEXT_MODELS = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'] as const;
+const COMPLEX_TEXT_MODELS = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'] as const;
+const FREE_TEXT_MODELS = FAST_TEXT_MODELS;
+
+const CHAT_REPLY_CACHE = new Map<string, { text: string; createdAt: number }>();
+const CHAT_CACHE_MAX = 80;
+const CHAT_CACHE_TTL_MS = 30 * 60 * 1000;
+
+function isComplexOrDetailedPrompt(text: string, hasAttachment: boolean): boolean {
+  const clean = text.trim();
+  if (hasAttachment && clean.length > 180) return true;
+  if (clean.length > 420 || clean.split('\n').length >= 6) return true;
+  return /\b(detail|details|detailed|in[- ]depth|explain\s+fully|step[- ]by[- ]step|comprehensive|thorough|elaborate|long\s+answer|essay|article|full\s+code|complete\s+code|architecture|debug|proof|compare\s+all|analyze\s+deeply|write\s+a\s+(?:long|full|complete))\b/i.test(
+    clean
+  );
+}
+
+function isCacheablePrompt(
+  turns: Array<{ role: 'user' | 'assistant'; content: string }>,
+  hasAttachment: boolean,
+  hasMemory: boolean
+): string | null {
+  if (hasAttachment || hasMemory || turns.length !== 1) return null;
+  const prompt = turns[0]?.content?.trim() || '';
+  if (!prompt || prompt.length > 240) return null;
+  if (
+    /\b(today|now|current|time|date|weather|news|random|roll|flip|remember|my\s+name|my\s+school|my\s+business)\b/i.test(
+      prompt
+    )
+  ) {
+    return null;
+  }
+  return prompt.toLowerCase().replace(/\s+/g, ' ');
+}
+
+function getCachedReply(cacheKey: string): string | null {
+  const entry = CHAT_REPLY_CACHE.get(cacheKey);
+  if (!entry) return null;
+  if (Date.now() - entry.createdAt > CHAT_CACHE_TTL_MS) {
+    CHAT_REPLY_CACHE.delete(cacheKey);
+    return null;
+  }
+  CHAT_REPLY_CACHE.delete(cacheKey);
+  CHAT_REPLY_CACHE.set(cacheKey, entry);
+  return entry.text;
+}
+
+function setCachedReply(cacheKey: string, text: string): void {
+  if (!text.trim() || text.length > 4000) return;
+  if (CHAT_REPLY_CACHE.size >= CHAT_CACHE_MAX) {
+    const oldestKey = CHAT_REPLY_CACHE.keys().next().value;
+    if (oldestKey !== undefined) CHAT_REPLY_CACHE.delete(oldestKey);
+  }
+  CHAT_REPLY_CACHE.set(cacheKey, { text, createdAt: Date.now() });
+}
+
+function extractReadableGeminiError(err: unknown, fallback: string): string {
+  const raw = err instanceof Error ? err.message : String(err || '');
+  if (!raw.trim()) return fallback;
+  try {
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as { error?: { message?: string }; message?: string };
+      const nested = parsed?.error?.message || parsed?.message;
+      if (nested && typeof nested === 'string') return nested;
+    }
+  } catch {
+    // ignore JSON parse issues
+  }
+  return raw;
+}
+
+function sanitizeSvgArtwork(rawText: string): string | null {
+  const match = rawText.match(/<svg[\s\S]*?<\/svg>/i);
+  if (!match) return null;
+  let svg = match[0]
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*(['"])[\s\S]*?\1/gi, '');
+  if (!/xmlns=/.test(svg)) {
+    svg = svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
+  return svg;
+}
+
+function ratioDimensions(ratio: string): { width: number; height: number } {
+  switch (ratio) {
+    case '3:4':
+      return { width: 768, height: 1024 };
+    case '4:3':
+      return { width: 1024, height: 768 };
+    case '9:16':
+      return { width: 720, height: 1280 };
+    case '16:9':
+      return { width: 1280, height: 720 };
+    default:
+      return { width: 1024, height: 1024 };
+  }
 }
 
 const LANGUAGE_LABELS: Record<string, string> = {
@@ -40,7 +154,7 @@ async function startServer() {
   app.use(express.json({ limit: '20mb' }));
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'nova-ai' });
+    res.json({ ok: true, service: 'nova-ai', aiConfigured: Boolean(getGeminiApiKey()) });
   });
 
   // Streaming Multilingual Chat Route (SSE, supports optional uploaded image + Memory)
@@ -65,14 +179,26 @@ async function startServer() {
       return;
     }
 
-    if (!process.env.GEMINI_API_KEY) {
-      res.status(500).json({ error: 'Gemini API key is not configured in Settings > Secrets.' });
+    if (!getGeminiApiKey()) {
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+      res.write(
+        `data: ${JSON.stringify({
+          text: 'Your free Gemini API key is not set in **Settings > Secrets** yet. Add `GEMINI_API_KEY` there to enable live AI responses.',
+        })}\n\n`
+      );
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
       return;
     }
 
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.socket?.setNoDelay?.(true);
     res.flushHeaders?.();
 
     const uiLangLabel = LANGUAGE_LABELS[uiLanguage ?? 'en'] || 'English';
@@ -95,25 +221,79 @@ async function startServer() {
         ? `USER MEMORY CONTEXT:\n${memoryLines.join('\n')}\nWhen your response relies on or references any detail from USER MEMORY CONTEXT (such as their name, school, business, favourite style, preferred language, or past chats), start your response with the exact token [[NOVA_MEMORY_USED]] on its own line.`
         : '';
 
+    const latestRawPrompt = messages[messages.length - 1]?.content || '';
+    const isDetailedRequest = isComplexOrDetailedPrompt(
+      latestRawPrompt,
+      Boolean(attachment?.base64)
+    );
+
+    const concisenessRule = isDetailedRequest
+      ? 'Provide a clear, thorough, well-structured explanation in clean Markdown.'
+      : 'BREVITY RULE: Keep replies short, sharp, and direct by default (1 to 4 crisp sentences or up to 4 concise bullet points). Answer immediately with zero filler or long intros. Only give a long answer if the user asks for details.';
+
     const systemInstruction = [
-      'You are Nova, a fast, warm, and deeply knowledgeable AI assistant built for worldwide users.',
+      'You are Nova, a fast, sharp AI assistant.',
       'CRITICAL LANGUAGE RULE: Automatically detect the language of the user\'s latest message and reply fluently and naturally in that exact same language—including English, Nigerian Pidgin (Naija Pidgin), Yoruba, Igbo, Hausa, Spanish, French, Portuguese, Arabic, Hindi, Chinese, or any other language—unless the user explicitly asks for a different language.',
       `If the user writes an ambiguous greeting or single symbol, default to ${memory?.preferredLanguage?.trim() || uiLangLabel}.`,
+      concisenessRule,
       memoryBlock,
-      'STRICT NO-ASCII-ART RULE: NEVER generate ASCII art, text drawings, character art, box-drawing characters (┌ ─ │ └ ├ ┤ ═ ║), or slash/backslash/underscore diagrams (/ \\ _ |) under any circumstances. Never attempt to draw maps, landforms, anatomy, or scenes using text characters. Explain concepts clearly in well-structured Markdown prose or bullet points.',
-      'Format responses cleanly using Markdown (clear headings, concise bullet points, and fenced code blocks with language tags for code). Keep answers accurate, well-structured, and direct.',
+      'STRICT NO-ASCII-ART RULE: NEVER generate ASCII art, text drawings, box-drawing characters, or slash/backslash diagrams.',
+      'Format responses cleanly using Markdown.',
     ]
       .filter(Boolean)
       .join(' ');
 
-    const filtered = messages
-      .filter((m) => m.content && m.content.trim().length > 0)
+    const cleanedHistory = messages
+      .map((m) => ({
+        role: m.role,
+        content: (m.content || '')
+          .replace(/\[\[NOVA_BUILDER_START\]\][\s\S]*?\[\[NOVA_BUILDER_END\]\]/g, '[Built interactive website/app preview]')
+          .replace(/\[\[NOVA_BUILDER_CATEGORIES\]\]/g, '')
+          .replace(/\[\[NOVA_MEMORY_USED\]\]/g, '')
+          .trim(),
+      }))
+      .filter((m) => m.content.length > 0)
       .slice(-24);
 
-    const contents = filtered.map((m, idx) => {
-      const isLastUser = idx === filtered.length - 1 && m.role === 'user';
+    const normalizedTurns: Array<{ role: 'user' | 'assistant'; content: string; isLastUser: boolean }> = [];
+    for (let idx = 0; idx < cleanedHistory.length; idx++) {
+      const m = cleanedHistory[idx];
+      const isLastUser = idx === cleanedHistory.length - 1 && m.role === 'user';
+      if (normalizedTurns.length === 0 && m.role !== 'user') continue;
+      const prev = normalizedTurns[normalizedTurns.length - 1];
+      if (prev && prev.role === m.role) {
+        prev.content = `${prev.content}\n\n${m.content}`;
+        prev.isLastUser = isLastUser;
+      } else {
+        normalizedTurns.push({ role: m.role, content: m.content, isLastUser });
+      }
+    }
+
+    if (normalizedTurns.length === 0) {
+      res.write(`data: ${JSON.stringify({ error: 'Please enter a message to ask Gemini.' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    const baseCacheKey = isCacheablePrompt(
+      normalizedTurns,
+      Boolean(attachment?.base64),
+      memoryLines.length > 0
+    );
+    const fullCacheKey = baseCacheKey ? `${uiLanguage ?? 'en'}:${baseCacheKey}` : null;
+    if (fullCacheKey) {
+      const cached = getCachedReply(fullCacheKey);
+      if (cached) {
+        res.write(`data: ${JSON.stringify({ text: cached, cached: true })}\n\n`);
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+        return;
+      }
+    }
+
+    const contents = normalizedTurns.map((m) => {
       const parts: Array<{ text?: string; inlineData?: { data: string; mimeType: string } }> = [];
-      if (isLastUser && attachment?.base64 && attachment?.mimeType) {
+      if (m.isLastUser && attachment?.base64 && attachment?.mimeType) {
         parts.push({
           inlineData: {
             data: attachment.base64,
@@ -128,33 +308,60 @@ async function startServer() {
       };
     });
 
-    try {
-      const ai = createAiClient();
-      const stream = await ai.models.generateContentStream({
-        model: 'gemini-4-hydrogen',
-        contents,
-        config: {
-          systemInstruction,
-        },
-      });
+    const ai = createAiClient();
+    const modelPriority = isDetailedRequest ? COMPLEX_TEXT_MODELS : FAST_TEXT_MODELS;
+    let streamedAny = false;
+    let fullReplyText = '';
+    let lastError: unknown = null;
 
-      for await (const chunk of stream) {
-        const delta = chunk.text;
-        if (delta) {
-          res.write(`data: ${JSON.stringify({ text: delta })}\n\n`);
+    for (const modelName of modelPriority) {
+      try {
+        const thinkingConfig =
+          modelName === 'gemini-4-hydrogen'
+            ? { thinkingLevel: isDetailedRequest ? ThinkingLevel.MEDIUM : ThinkingLevel.LOW }
+            : undefined;
+
+        const stream = await ai.models.generateContentStream({
+          model: modelName,
+          contents,
+          config: {
+            systemInstruction,
+            ...(thinkingConfig ? { thinkingConfig } : {}),
+          },
+        });
+
+        for await (const chunk of stream) {
+          const delta = chunk.text;
+          if (delta) {
+            streamedAny = true;
+            fullReplyText += delta;
+            res.write(`data: ${JSON.stringify({ text: delta })}\n\n`);
+          }
         }
+        if (fullCacheKey && fullReplyText.trim()) {
+          setCachedReply(fullCacheKey, fullReplyText.trim());
+        }
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+        return;
+      } catch (err: unknown) {
+        lastError = err;
+        console.warn(`Chat model ${modelName} fallback:`, err instanceof Error ? err.message : err);
+        if (streamedAny) break;
       }
-      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-      res.end();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to generate chat response.';
-      console.error('Chat API error:', msg);
-      res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
-      res.end();
     }
+
+    const msg = extractReadableGeminiError(lastError, 'Failed to generate Gemini chat response.');
+    console.error('Chat API error:', msg);
+    if (!streamedAny) {
+      res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
+    } else {
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+    }
+    res.end();
   });
 
-  // Image Generation & Editing Route (Supports Styles, Sizes, Image Editing, and 4x Variations)
+  // Image Generation & Editing Route (Tries Paid Image Model, Seamlessly Falls Back to Free-Key AI Vector Artwork & Labeled Diagrams)
   app.post('/api/image', async (req, res) => {
     const { prompt, aspectRatio, style, count, sourceImage } = req.body as {
       prompt?: string;
@@ -169,7 +376,7 @@ async function startServer() {
       return;
     }
 
-    if (!process.env.GEMINI_API_KEY) {
+    if (!getGeminiApiKey()) {
       res.status(500).json({ error: 'Gemini API key is not configured in Settings > Secrets.' });
       return;
     }
@@ -201,6 +408,55 @@ async function startServer() {
 
     const styleSuffix = style && styleHints[style] ? `, ${styleHints[style]}` : '';
     const basePrompt = `${prompt.trim()}${styleSuffix}${diagramBoost}`;
+    const dims = ratioDimensions(safeRatio);
+
+    const generateFreeSvgArtwork = async (variationIndex: number) => {
+      const ai = createAiClient();
+      const parts: Array<{ text?: string; inlineData?: { data: string; mimeType: string } }> = [];
+      if (sourceImage?.base64 && sourceImage?.mimeType) {
+        parts.push({
+          inlineData: {
+            data: sourceImage.base64,
+            mimeType: sourceImage.mimeType,
+          },
+        });
+      }
+
+      const svgInstruction = [
+        `Generate a rich, colorful, high-detail SVG artwork matching: "${prompt.trim()}"`,
+        style ? `Visual style: ${style}.` : '',
+        numImages > 1 ? `Make creative visual variation #${variationIndex + 1} with a distinct palette and layout.` : '',
+        isEducationalDiagram
+          ? 'This is an educational diagram: include accurate cross-section layers/shapes, bright contrasting colors, clean pointer lines, a clear title header, and legible English labels.'
+          : 'Include rich gradients (<linearGradient>, <radialGradient>), layered shapes, atmospheric glow, foreground details, and clean typography if appropriate (such as for logos or posters).',
+        `Use exact root tag: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${dims.width} ${dims.height}" width="${dims.width}" height="${dims.height}">`,
+        'Return ONLY raw valid <svg>...</svg> markup with no markdown fences and no <script> tags.',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      parts.push({ text: svgInstruction });
+
+      for (const modelName of FREE_TEXT_MODELS) {
+        try {
+          const svgRes = await ai.models.generateContent({
+            model: modelName,
+            contents: { parts },
+          });
+          const cleanedSvg = sanitizeSvgArtwork(svgRes.text ?? '');
+          if (cleanedSvg) {
+            const b64 = Buffer.from(cleanedSvg, 'utf-8').toString('base64');
+            return {
+              imageUrl: `data:image/svg+xml;base64,${b64}`,
+              caption: prompt.trim(),
+            };
+          }
+        } catch (svgErr) {
+          console.warn(`Free SVG model ${modelName} fallback:`, svgErr instanceof Error ? svgErr.message : svgErr);
+        }
+      }
+      throw new Error('Unable to render visual.');
+    };
 
     const generateSingle = async (variationIndex: number) => {
       const ai = createAiClient();
@@ -220,33 +476,40 @@ async function startServer() {
       }
       parts.push({ text: variationPrompt });
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-lite-image',
-        contents: { parts },
-        config: {
-          imageConfig: {
-            aspectRatio: safeRatio,
+      try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.1-flash-lite-image',
+          contents: { parts },
+          config: {
+            imageConfig: {
+              aspectRatio: safeRatio,
+            },
           },
-        },
-      });
+        });
 
-      let imageUrl: string | null = null;
-      let caption = '';
+        let imageUrl: string | null = null;
+        let caption = '';
 
-      for (const part of response.candidates?.[0]?.content?.parts ?? []) {
-        if (part.inlineData?.data) {
-          const mime = part.inlineData.mimeType ?? 'image/png';
-          imageUrl = `data:${mime};base64,${part.inlineData.data}`;
-        } else if (part.text) {
-          caption += part.text;
+        for (const part of response.candidates?.[0]?.content?.parts ?? []) {
+          if (part.inlineData?.data) {
+            const mime = part.inlineData.mimeType ?? 'image/png';
+            imageUrl = `data:${mime};base64,${part.inlineData.data}`;
+          } else if (part.text) {
+            caption += part.text;
+          }
         }
+
+        if (imageUrl) {
+          return { imageUrl, caption: caption.trim() };
+        }
+      } catch (err) {
+        console.info(
+          'Switching to free-key vector illustration mode:',
+          err instanceof Error ? err.message : err
+        );
       }
 
-      if (!imageUrl) {
-        throw new Error('No image was returned by the model.');
-      }
-
-      return { imageUrl, caption: caption.trim() };
+      return generateFreeSvgArtwork(variationIndex);
     };
 
     try {
@@ -262,21 +525,6 @@ async function startServer() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('Image API error:', msg);
-      const needsPaidKey =
-        msg.includes('RESOURCE_EXHAUSTED') ||
-        msg.includes('PERMISSION_DENIED') ||
-        msg.includes('429') ||
-        msg.includes('403') ||
-        msg.includes('billing') ||
-        msg.includes('quota');
-
-      if (needsPaidKey) {
-        res.status(402).json({
-          code: 'PAID_KEY_REQUIRED',
-          error: 'Image generation requires a billing-enabled Gemini API key in Settings > Secrets.',
-        });
-        return;
-      }
       res.status(500).json({ error: msg });
     }
   });
@@ -317,15 +565,24 @@ async function startServer() {
     let quote = fallbackQuotes[safeStyle]?.quote || 'Begin today with clarity and calm.';
     let visualPrompt = `Ultra-clean vertical 9:16 mobile wallpaper in ${safeStyle} aesthetic, deep obsidian and radiant purple glow, minimalist luxury`;
 
-    if (process.env.GEMINI_API_KEY) {
+    if (getGeminiApiKey()) {
       try {
         const ai = createAiClient();
-        const textRes = await ai.models.generateContent({
-          model: 'gemini-4-hydrogen',
-          contents: `Create a fresh daily mobile wallpaper concept for style "${safeStyle}" (variation seed ${seed ?? Date.now()}). Reply in strict JSON with 3 short string fields: "title" (2-4 words), "quote" (if style is "Bible Verse", give an inspiring authentic Bible verse with reference; if "Motivation", give an uplifting quote; otherwise a poetic 1-line caption), and "visualPrompt" (a rich 20-word visual prompt for a 9:16 dark-purple luxury phone wallpaper).`,
-          config: { responseMimeType: 'application/json' },
-        });
-        const parsed = JSON.parse((textRes.text ?? '{}').trim()) as {
+        let textResText = '';
+        for (const modelName of FREE_TEXT_MODELS) {
+          try {
+            const textRes = await ai.models.generateContent({
+              model: modelName,
+              contents: `Create a fresh daily mobile wallpaper concept for style "${safeStyle}" (variation seed ${seed ?? Date.now()}). Reply in strict JSON with 3 short string fields: "title" (2-4 words), "quote" (if style is "Bible Verse", give an inspiring authentic Bible verse with reference; if "Motivation", give an uplifting quote; otherwise a poetic 1-line caption), and "visualPrompt" (a rich 20-word visual prompt for a 9:16 dark-purple luxury phone wallpaper).`,
+              config: { responseMimeType: 'application/json' },
+            });
+            textResText = (textRes.text ?? '{}').trim();
+            if (textResText && textResText !== '{}') break;
+          } catch {
+            // try next free model
+          }
+        }
+        const parsed = JSON.parse(textResText || '{}') as {
           title?: string;
           quote?: string;
           visualPrompt?: string;
@@ -385,7 +642,7 @@ async function startServer() {
       return;
     }
 
-    if (!process.env.GEMINI_API_KEY) {
+    if (!getGeminiApiKey()) {
       res.status(500).json({ error: 'Builder is temporarily unavailable right now.' });
       return;
     }
@@ -420,26 +677,41 @@ async function startServer() {
 
     try {
       const ai = createAiClient();
-      const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: contentsPayload,
-        config: {
-          systemInstruction: builderSystemInstruction,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              title: { type: Type.STRING },
-              appType: { type: Type.STRING, enum: ['website', 'app'] },
-              summary: { type: Type.STRING },
-              html: { type: Type.STRING },
-            },
-            required: ['title', 'appType', 'summary', 'html'],
-          },
-        },
-      });
+      let rawText = '';
+      let buildError: unknown = null;
 
-      const rawText = (response.text ?? '').trim();
+      for (const modelName of FREE_TEXT_MODELS) {
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: contentsPayload,
+            config: {
+              systemInstruction: builderSystemInstruction,
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  appType: { type: Type.STRING, enum: ['website', 'app'] },
+                  summary: { type: Type.STRING },
+                  html: { type: Type.STRING },
+                },
+                required: ['title', 'appType', 'summary', 'html'],
+              },
+            },
+          });
+          rawText = (response.text ?? '').trim();
+          if (rawText) break;
+        } catch (err) {
+          buildError = err;
+          console.warn(`Builder model ${modelName} fallback:`, err instanceof Error ? err.message : err);
+        }
+      }
+
+      if (!rawText && buildError) {
+        throw buildError;
+      }
+
       const parsed = JSON.parse(rawText) as {
         title?: string;
         appType?: string;
@@ -465,48 +737,49 @@ async function startServer() {
     }
   });
 
-  // Audio Transcription Route (Mic Dictation using valid Gemini multimodal model, quiet fallback)
+  // Audio Transcription Route (Mic Dictation using valid free-tier Gemini multimodal models, quiet fallback)
   app.post('/api/transcribe', async (req, res) => {
     const { audioBase64, mimeType } = req.body as {
       audioBase64?: string;
       mimeType?: string;
     };
 
-    if (!audioBase64) {
-      res.json({ text: '', unavailable: true });
-      return;
-    }
-
-    if (!process.env.GEMINI_API_KEY) {
+    if (!audioBase64 || !getGeminiApiKey()) {
       res.json({ text: '', unavailable: true });
       return;
     }
 
     try {
       const ai = createAiClient();
-      const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType: mimeType || 'audio/webm',
-                data: audioBase64,
-              },
+      for (const modelName of FREE_TEXT_MODELS) {
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: mimeType || 'audio/webm',
+                    data: audioBase64,
+                  },
+                },
+                {
+                  text: 'Transcribe this spoken audio accurately in its original language (English, Nigerian Pidgin, Yoruba, Igbo, Hausa, or other). Return ONLY the transcribed text without quotes or commentary.',
+                },
+              ],
             },
-            {
-              text: 'Transcribe this spoken audio accurately in its original language (English, Nigerian Pidgin, Yoruba, Igbo, Hausa, or other). Return ONLY the transcribed text without quotes or commentary.',
-            },
-          ],
-        },
-      });
+          });
 
-      const transcript = (response.text ?? '').trim();
-      if (!transcript) {
-        res.json({ text: '', unavailable: true });
-        return;
+          const transcript = (response.text ?? '').trim();
+          if (transcript) {
+            res.json({ text: transcript });
+            return;
+          }
+        } catch (modelErr) {
+          console.warn(`Transcribe ${modelName} fallback:`, modelErr instanceof Error ? modelErr.message : modelErr);
+        }
       }
-      res.json({ text: transcript });
+      res.json({ text: '', unavailable: true });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Transcription unavailable.';
       console.warn('Transcribe fallback:', msg);
@@ -526,7 +799,7 @@ async function startServer() {
       return;
     }
 
-    if (!process.env.GEMINI_API_KEY) {
+    if (!getGeminiApiKey()) {
       res.status(500).json({ error: 'Gemini API key is not configured in Settings > Secrets.' });
       return;
     }
@@ -639,8 +912,8 @@ async function startServer() {
     const memParam = reqUrl.searchParams.get('mem') || '';
     const uiLangName = LANGUAGE_LABELS[uiLang] || 'English';
 
-    if (!process.env.GEMINI_API_KEY) {
-      clientWs.send(JSON.stringify({ error: 'Gemini API key is not configured.' }));
+    if (!getGeminiApiKey()) {
+      clientWs.send(JSON.stringify({ error: 'Voice not available, type instead' }));
       clientWs.close();
       return;
     }

@@ -64,7 +64,7 @@ interface ChatMessageItemProps {
   onQuickPickBuilderCategory?: (category: string) => void;
 }
 
-export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
+export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
   message,
   t,
   voiceName,
@@ -441,6 +441,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
               {displayMarkdown && (
                 <div className="nova-prose">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayMarkdown}</ReactMarkdown>
+                  {isStreaming && <span className="nova-stream-cursor" aria-hidden="true" />}
                 </div>
               )}
               {hasBuilderCategories && onQuickPickBuilderCategory && (
@@ -483,11 +484,14 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
               )}
             </>
           ) : isStreaming ? (
-            /* 3-Dot Typing Animation when Nova is thinking */
-            <div className="flex items-center gap-2 py-1" aria-label={t.thinking}>
-              <span className="w-2 h-2 rounded-full bg-purple-400 nova-dot" />
-              <span className="w-2 h-2 rounded-full bg-purple-400 nova-dot nova-dot-2" />
-              <span className="w-2 h-2 rounded-full bg-purple-400 nova-dot nova-dot-3" />
+            /* Instant 3-Dot Typing Animation */
+            <div className="flex items-center gap-2.5 py-0.5" aria-label={t.thinking}>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-purple-400 nova-dot" />
+                <span className="w-2 h-2 rounded-full bg-purple-400 nova-dot nova-dot-2" />
+                <span className="w-2 h-2 rounded-full bg-purple-400 nova-dot nova-dot-3" />
+              </div>
+              <span className="text-xs text-slate-400">Nova is typing...</span>
             </div>
           ) : null}
         </div>
@@ -674,4 +678,6 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
       </div>
     </div>
   );
-};
+});
+
+ChatMessageItem.displayName = 'ChatMessageItem';
