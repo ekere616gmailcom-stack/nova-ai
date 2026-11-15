@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   Brain,
   Check,
-  Crown,
   Eye,
   Gauge,
   Globe,
@@ -13,7 +12,6 @@ import {
 import {
   LanguageCode,
   NovaMemory,
-  PlanType,
   SUPPORTED_LANGUAGES,
   UserProfile,
   VOICE_OPTIONS,
@@ -31,7 +29,6 @@ interface SettingsModalProps {
   onChangeLanguage: (lang: LanguageCode) => void;
   onChangeVoice: (voice: VoiceName) => void;
   onChangeVoiceSpeed: (speed: VoiceSpeed) => void;
-  onChangePlan: (plan: PlanType) => void;
   onUpdateMemory: (patch: Partial<NovaMemory>) => void;
   onClearMemory: () => void;
   t: TranslationStrings;
@@ -46,7 +43,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onChangeLanguage,
   onChangeVoice,
   onChangeVoiceSpeed,
-  onChangePlan,
   onUpdateMemory,
   onClearMemory,
   t,
@@ -56,7 +52,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   if (!isOpen) return null;
 
-  const isPremium = profile.plan === 'premium';
   const isFemaleVoice = profile.voiceName === 'Kore' || profile.voiceName === 'Zephyr';
 
   const savedMemoryCount = [
@@ -79,8 +74,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       <div className="w-full max-w-xl max-h-[90vh] overflow-y-auto overscroll-y-contain rounded-2xl bg-[#0A0A0A] border border-[#BF5AF2]/40 p-6 shadow-[0_0_64px_-16px_rgba(191,90,242,0.55)] space-y-6">
         <div className="flex items-center justify-between gap-4 pb-4 border-b border-[#A855F7]/25">
           <div>
-            <h2 className="font-display text-xl font-semibold text-white">Customize Nova</h2>
-            <p className="text-xs text-white/60 mt-0.5">{t.settings}</p>
+            <h2 className="font-display text-xl font-semibold text-white">{t.settings}</h2>
+            <p className="text-xs text-white/60 mt-0.5">Local memory, language &amp; voice</p>
           </div>
           <button
             type="button"
@@ -92,7 +87,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
         </div>
 
-        {/* Memory Section inside Customize */}
+        {/* Local Memory Section */}
         <div className="rounded-2xl bg-black border border-[#A855F7]/35 p-4 space-y-3.5">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-2.5">
@@ -100,9 +95,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <Brain className="w-4 h-4 text-[#BF5AF2]" />
               </div>
               <div>
-                <div className="text-sm font-semibold text-white">Memory</div>
+                <div className="text-sm font-semibold text-white">Local Memory</div>
                 <p className="text-xs text-white/65 mt-0.5">
-                  Nova remembers your name, school, business, favourite style, language, and past chats ({savedMemoryCount} saved).
+                  Nova remembers your name, style, school, business, language, and past chats locally on this device ({savedMemoryCount} saved).
                 </p>
               </div>
             </div>
@@ -115,7 +110,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-medium bg-[#0A0A0A] border border-[#BF5AF2]/50 text-white hover:bg-[#A855F7]/20 transition-colors cursor-pointer"
             >
               <Eye className="w-3.5 h-3.5 text-[#BF5AF2]" />
-              <span>{showMemoryPanel ? 'Hide Memory' : 'View Memory'}</span>
+              <span>{showMemoryPanel ? 'Hide Memory' : 'View & Edit Memory'}</span>
             </button>
 
             <button
@@ -143,6 +138,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </label>
 
                 <label className="space-y-1">
+                  <span className="text-[11px] text-white/65">Favourite Style &amp; Vibe</span>
+                  <input
+                    type="text"
+                    value={memory.favouriteStyle}
+                    onChange={(e) => onUpdateMemory({ favouriteStyle: e.target.value })}
+                    placeholder="e.g. Casual & funny, Anime, Cinematic"
+                    className="w-full rounded-xl bg-[#0A0A0A] border border-[#A855F7]/30 px-3 py-2 text-xs text-white placeholder:text-white/40 focus:outline-none focus:border-[#BF5AF2]"
+                  />
+                </label>
+
+                <label className="space-y-1">
                   <span className="text-[11px] text-white/65">School</span>
                   <input
                     type="text"
@@ -160,17 +166,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     value={memory.business}
                     onChange={(e) => onUpdateMemory({ business: e.target.value })}
                     placeholder="e.g. Fashion brand"
-                    className="w-full rounded-xl bg-[#0A0A0A] border border-[#A855F7]/30 px-3 py-2 text-xs text-white placeholder:text-white/40 focus:outline-none focus:border-[#BF5AF2]"
-                  />
-                </label>
-
-                <label className="space-y-1">
-                  <span className="text-[11px] text-white/65">Favourite Style</span>
-                  <input
-                    type="text"
-                    value={memory.favouriteStyle}
-                    onChange={(e) => onUpdateMemory({ favouriteStyle: e.target.value })}
-                    placeholder="e.g. Anime, Cinematic"
                     className="w-full rounded-xl bg-[#0A0A0A] border border-[#A855F7]/30 px-3 py-2 text-xs text-white placeholder:text-white/40 focus:outline-none focus:border-[#BF5AF2]"
                   />
                 </label>
@@ -235,7 +230,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         </div>
 
-        {/* Voice Settings: Male / Female + Speed (Slow / Normal / Fast) */}
+        {/* Read-Aloud Voice Settings */}
         <div className="space-y-3">
           <div className="flex items-center gap-2 text-sm font-medium text-white">
             <Volume2 className="w-4 h-4 text-[#BF5AF2]" />
@@ -309,26 +304,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               ))}
             </div>
           </div>
-        </div>
-
-        {/* Plan Switch */}
-        <div className="rounded-xl bg-black border border-[#A855F7]/35 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="inline-flex items-center gap-1.5 text-sm font-semibold text-white">
-              <Crown className="w-4 h-4 text-[#BF5AF2]" />
-              <span>{isPremium ? t.premiumPlan : t.freePlan}</span>
-            </div>
-            <p className="text-xs text-white/60">
-              {isPremium ? t.premiumPlanDesc : t.freePlanDesc}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => onChangePlan(isPremium ? 'free' : 'premium')}
-            className="px-4 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            {isPremium ? t.switchToFree : t.activatePremium}
-          </button>
         </div>
 
         <div className="flex justify-end">

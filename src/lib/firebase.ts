@@ -5,7 +5,7 @@ import {
   GoogleAuthProvider,
   setPersistence,
 } from 'firebase/auth';
-import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
+import { getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
@@ -70,18 +70,6 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Validate connection to Firestore on application boot
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
-    }
-  }
-}
-void testConnection();
-
 export function getTodayDateKey(): string {
   const now = new Date();
   const y = now.getFullYear();
@@ -91,7 +79,7 @@ export function getTodayDateKey(): string {
 }
 
 export async function compressDataUrlForStorage(dataUrl: string): Promise<string> {
-  if (dataUrl.length <= 320000) return dataUrl;
+  if (!dataUrl.startsWith('data:') || dataUrl.length <= 320000) return dataUrl;
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {

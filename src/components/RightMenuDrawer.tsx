@@ -1,9 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  FolderOpen,
+  History,
   Image as ImageIcon,
   MessageSquare,
-  Phone,
   Search,
   SlidersHorizontal,
   User as UserIcon,
@@ -18,7 +17,7 @@ interface RightMenuDrawerProps {
   onClose: () => void;
   activeView: ActiveView;
   onSelectView: (view: ActiveView) => void;
-  onOpenCustomize: () => void;
+  onOpenSettings: () => void;
   chats: ChatSession[];
   images: SavedImageEntry[];
   onOpenChat: (chatId: string) => void;
@@ -29,7 +28,7 @@ export const RightMenuDrawer: React.FC<RightMenuDrawerProps> = ({
   onClose,
   activeView,
   onSelectView,
-  onOpenCustomize,
+  onOpenSettings,
   chats,
   images,
   onOpenChat,
@@ -85,7 +84,7 @@ export const RightMenuDrawer: React.FC<RightMenuDrawerProps> = ({
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
-        {/* Top Header: Search Icon + Nova Title + Close */}
+        {/* Top Header */}
         <div className="flex items-center justify-between gap-2 px-4 py-4 border-b border-[#A855F7]/25 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <button
@@ -130,7 +129,7 @@ export const RightMenuDrawer: React.FC<RightMenuDrawerProps> = ({
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search chats, images & files..."
+                placeholder="Search chats & images..."
                 className="w-full rounded-2xl bg-black border border-[#A855F7]/40 ps-8 pe-3 py-2 text-xs text-white placeholder:text-white/45 focus:outline-none focus:border-[#BF5AF2]"
               />
             </div>
@@ -189,8 +188,36 @@ export const RightMenuDrawer: React.FC<RightMenuDrawerProps> = ({
             </div>
           )}
 
-          {/* Core Menu List */}
-          <nav className="space-y-2" aria-label="Nova right menu">
+          {/* Core Menu List: Chat, Real photo / AI art, Ekere wallpaper, Settings */}
+          <nav className="space-y-2" aria-label="Nova menu">
+            <button
+              type="button"
+              onClick={() => {
+                onSelectView('chat');
+                onClose();
+              }}
+              className={`w-full flex items-center justify-between gap-3 px-3.5 py-3 rounded-2xl text-sm font-medium transition-all cursor-pointer border ${
+                activeView === 'chat'
+                  ? 'bg-black border-[#BF5AF2] text-white nova-active-glow'
+                  : 'bg-black border-[#A855F7]/25 text-white hover:border-[#BF5AF2]'
+              }`}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-[#A855F7]/20 border border-[#BF5AF2]/40 flex items-center justify-center shrink-0">
+                  <MessageSquare className="w-4 h-4 text-[#BF5AF2]" />
+                </div>
+                <div className="text-start min-w-0">
+                  <div className="text-sm font-medium text-white">Chat &amp; Build</div>
+                  <div className="text-[11px] text-white/60 truncate">
+                    Ask Nova or build websites &amp; apps
+                  </div>
+                </div>
+              </div>
+              <span className="text-xs font-mono tabular-nums text-white/65 shrink-0">
+                {chats.length}
+              </span>
+            </button>
+
             <button
               type="button"
               onClick={() => {
@@ -208,9 +235,9 @@ export const RightMenuDrawer: React.FC<RightMenuDrawerProps> = ({
                   <ImageIcon className="w-4 h-4 text-[#BF5AF2]" />
                 </div>
                 <div className="text-start min-w-0">
-                  <div className="text-sm font-medium text-white">Images</div>
+                  <div className="text-sm font-medium text-white">Real Photo &amp; AI Art</div>
                   <div className="text-[11px] text-white/60 truncate">
-                    Gallery of all AI images
+                    Generate photos, art &amp; gallery
                   </div>
                 </div>
               </div>
@@ -222,23 +249,23 @@ export const RightMenuDrawer: React.FC<RightMenuDrawerProps> = ({
             <button
               type="button"
               onClick={() => {
-                onSelectView('space');
+                onSelectView('history');
                 onClose();
               }}
               className={`w-full flex items-center justify-between gap-3 px-3.5 py-3 rounded-2xl text-sm font-medium transition-all cursor-pointer border ${
-                activeView === 'space'
+                activeView === 'history'
                   ? 'bg-black border-[#BF5AF2] text-white nova-active-glow'
                   : 'bg-black border-[#A855F7]/25 text-white hover:border-[#BF5AF2]'
               }`}
             >
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-8 h-8 rounded-xl bg-[#A855F7]/20 border border-[#BF5AF2]/40 flex items-center justify-center shrink-0">
-                  <FolderOpen className="w-4 h-4 text-[#BF5AF2]" />
+                  <History className="w-4 h-4 text-[#BF5AF2]" />
                 </div>
                 <div className="text-start min-w-0">
-                  <div className="text-sm font-medium text-white">Space</div>
+                  <div className="text-sm font-medium text-white">Full History</div>
                   <div className="text-[11px] text-white/60 truncate">
-                    Saved chats &amp; uploaded files
+                    Big scrollable view of all chats
                   </div>
                 </div>
               </div>
@@ -250,8 +277,31 @@ export const RightMenuDrawer: React.FC<RightMenuDrawerProps> = ({
             <button
               type="button"
               onClick={() => {
+                onSelectView('wallpaper');
                 onClose();
-                onOpenCustomize();
+              }}
+              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl text-sm font-medium transition-all cursor-pointer border ${
+                activeView === 'wallpaper'
+                  ? 'bg-black border-[#BF5AF2] text-white nova-active-glow'
+                  : 'bg-black border-[#A855F7]/25 text-white hover:border-[#BF5AF2]'
+              }`}
+            >
+              <div className="w-8 h-8 rounded-xl bg-[#A855F7]/20 border border-[#BF5AF2]/40 flex items-center justify-center shrink-0">
+                <Wallpaper className="w-4 h-4 text-[#BF5AF2]" />
+              </div>
+              <div className="text-start min-w-0">
+                <div className="text-sm font-medium text-white">Ekere Wallpaper</div>
+                <div className="text-[11px] text-white/60 truncate">
+                  9:16 mobile AI wallpapers
+                </div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenSettings();
               }}
               className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl text-sm font-medium bg-black border border-[#A855F7]/25 text-white hover:border-[#BF5AF2] transition-all cursor-pointer"
             >
@@ -259,50 +309,11 @@ export const RightMenuDrawer: React.FC<RightMenuDrawerProps> = ({
                 <SlidersHorizontal className="w-4 h-4 text-[#BF5AF2]" />
               </div>
               <div className="text-start min-w-0">
-                <div className="text-sm font-medium text-white">Customize</div>
+                <div className="text-sm font-medium text-white">Settings</div>
                 <div className="text-[11px] text-white/60 truncate">
-                  Language, Nova voice &amp; plan
+                  Memory, language &amp; voice
                 </div>
               </div>
-            </button>
-          </nav>
-
-          {/* Smart Features & Account Quick Links */}
-          <div className="pt-3 border-t border-[#A855F7]/20 space-y-1.5">
-            <div className="px-2 pb-1 text-[11px] font-medium text-white/55">
-              Tools &amp; Account
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                onSelectView('contacts');
-                onClose();
-              }}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-2xl text-xs font-medium transition-colors cursor-pointer border ${
-                activeView === 'contacts'
-                  ? 'bg-black text-white border-[#BF5AF2] nova-active-glow'
-                  : 'text-white/80 hover:bg-black hover:text-white border-transparent hover:border-[#A855F7]/30'
-              }`}
-            >
-              <Phone className="w-4 h-4 text-[#BF5AF2] shrink-0" />
-              <span>Contacts &amp; Calls</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                onSelectView('wallpaper');
-                onClose();
-              }}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-2xl text-xs font-medium transition-colors cursor-pointer border ${
-                activeView === 'wallpaper'
-                  ? 'bg-black text-white border-[#BF5AF2] nova-active-glow'
-                  : 'text-white/80 hover:bg-black hover:text-white border-transparent hover:border-[#A855F7]/30'
-              }`}
-            >
-              <Wallpaper className="w-4 h-4 text-[#BF5AF2] shrink-0" />
-              <span>Daily Wallpaper</span>
             </button>
 
             <button
@@ -311,16 +322,63 @@ export const RightMenuDrawer: React.FC<RightMenuDrawerProps> = ({
                 onSelectView('profile');
                 onClose();
               }}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-2xl text-xs font-medium transition-colors cursor-pointer border ${
+              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl text-sm font-medium transition-all cursor-pointer border ${
                 activeView === 'profile'
-                  ? 'bg-black text-white border-[#BF5AF2] nova-active-glow'
-                  : 'text-white/80 hover:bg-black hover:text-white border-transparent hover:border-[#A855F7]/30'
+                  ? 'bg-black border-[#BF5AF2] text-white nova-active-glow'
+                  : 'bg-black border-[#A855F7]/25 text-white hover:border-[#BF5AF2]'
               }`}
             >
-              <UserIcon className="w-4 h-4 text-[#BF5AF2] shrink-0" />
-              <span>Profile &amp; Account</span>
+              <div className="w-8 h-8 rounded-xl bg-[#A855F7]/20 border border-[#BF5AF2]/40 flex items-center justify-center shrink-0">
+                <UserIcon className="w-4 h-4 text-[#BF5AF2]" />
+              </div>
+              <div className="text-start min-w-0">
+                <div className="text-sm font-medium text-white">Account</div>
+                <div className="text-[11px] text-white/60 truncate">
+                  Google sign-in &amp; chat history
+                </div>
+              </div>
             </button>
-          </div>
+          </nav>
+
+          {chats.length > 0 && (
+            <div className="space-y-2 pt-2 border-t border-[#A855F7]/20">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-xs font-semibold text-[#BF5AF2]">Recent History</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectView('history');
+                    onClose();
+                  }}
+                  className="text-xs text-white/75 hover:text-white underline underline-offset-2 cursor-pointer"
+                >
+                  Open Big View
+                </button>
+              </div>
+              <div className="space-y-1.5 max-h-64 overflow-y-auto overscroll-y-contain pe-1">
+                {chats.map((chat) => (
+                  <button
+                    key={chat.id}
+                    type="button"
+                    onClick={() => {
+                      onOpenChat(chat.id);
+                      onClose();
+                    }}
+                    className="w-full flex flex-col gap-0.5 px-3 py-2.5 rounded-2xl bg-black border border-[#A855F7]/25 hover:border-[#BF5AF2] text-start transition-colors cursor-pointer"
+                  >
+                    <span className="text-xs font-semibold text-white truncate">
+                      {chat.title}
+                    </span>
+                    {chat.lastMessagePreview && (
+                      <span className="text-[11px] text-white/55 truncate">
+                        {chat.lastMessagePreview}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </aside>
     </div>

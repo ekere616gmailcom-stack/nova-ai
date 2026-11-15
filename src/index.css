@@ -20,6 +20,12 @@
     -webkit-overflow-scrolling: touch;
   }
 
+  img {
+    filter: none;
+    mix-blend-mode: normal;
+    opacity: 1;
+  }
+
   code,
   pre,
   .font-mono {
@@ -121,6 +127,43 @@
   border-radius: 2px;
   background-color: #bf5af2;
   animation: novaCursorBlink 0.7s infinite;
+}
+
+/* Read Aloud visual waveform equalizer */
+@keyframes novaWaveBar {
+  0%, 100% {
+    transform: scaleY(0.32);
+    opacity: 0.65;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.nova-wave-bar {
+  display: inline-block;
+  width: 2.5px;
+  height: 13px;
+  border-radius: 9999px;
+  transform-origin: center bottom;
+  background-color: #bf5af2;
+  animation: novaWaveBar 0.8s ease-in-out infinite;
+}
+
+.nova-wave-bar-1 {
+  animation-delay: 0s;
+}
+.nova-wave-bar-2 {
+  animation-delay: 0.16s;
+  background-color: #a855f7;
+}
+.nova-wave-bar-3 {
+  animation-delay: 0.32s;
+}
+.nova-wave-bar-4 {
+  animation-delay: 0.48s;
+  background-color: #a855f7;
 }
 
 /* Image generation shimmer */
@@ -263,6 +306,59 @@
   background: rgba(168, 85, 247, 0.18);
   color: #ffffff;
   font-weight: 600;
+}
+
+/* Rotating Earth live wallpaper */
+@keyframes novaRotateEarth {
+  from {
+    background-position: 0% 0%;
+  }
+  to {
+    background-position: 200% 0%;
+  }
+}
+
+@keyframes novaRotateClouds {
+  from {
+    background-position: 0% 0%;
+  }
+  to {
+    background-position: 200% 0%;
+  }
+}
+
+.nova-earth-glow {
+  background: radial-gradient(
+    circle,
+    rgba(0, 120, 255, 0.28) 0%,
+    rgba(56, 189, 248, 0.14) 45%,
+    transparent 68%
+  );
+  filter: blur(12px);
+}
+
+.nova-earth-sphere {
+  background-image: url("https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/earth_atmos_2048.jpg");
+  background-size: 200% 100%;
+  background-repeat: repeat-x;
+  background-position: 0% 0%;
+  filter: none;
+  mix-blend-mode: normal;
+  box-shadow:
+    inset -30px -20px 60px rgba(0, 0, 0, 0.92),
+    inset 10px 10px 30px rgba(255, 255, 255, 0.16),
+    0 0 60px rgba(0, 120, 255, 0.45),
+    0 0 120px rgba(0, 120, 255, 0.22);
+  animation: novaRotateEarth 40s linear infinite;
+}
+
+.nova-earth-clouds {
+  background-image: url("https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/earth_clouds_1024.png");
+  background-size: 200% 100%;
+  background-repeat: repeat-x;
+  background-position: 0% 0%;
+  opacity: 0.42;
+  animation: novaRotateClouds 28s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

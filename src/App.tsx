@@ -21,11 +21,10 @@ import {
 } from 'firebase/firestore';
 import {
   ArrowUp,
-  AudioLines,
   Check,
-  Crown,
   Download,
   Globe,
+  History,
   Image as ImageIcon,
   Loader2,
   LogIn,
@@ -35,11 +34,9 @@ import {
   Mic,
   PanelLeftClose,
   PanelLeftOpen,
-  Phone,
   Plus,
   Search,
   Settings,
-  Share2,
   Sparkles,
   Square,
   Trash2,
@@ -52,9 +49,6 @@ import {
   AspectRatio,
   ChatMessage,
   ChatSession,
-  ContactItem,
-  FREE_DAILY_LIMIT,
-  FREE_IMAGE_LIMIT,
   IMAGE_RATIOS,
   IMAGE_STUDIO_MODES,
   IMAGE_STYLES,
@@ -79,28 +73,22 @@ import {
   db,
   getTodayDateKey,
   googleProvider,
-  handleFirestoreError,
-  OperationType,
 } from './lib/firebase';
 import { NovaLogo } from './components/NovaLogo';
 import { ChatMessageItem } from './components/ChatMessageItem';
-import { VoiceChatModal } from './components/VoiceChatModal';
 import { UserProfileView } from './components/UserProfileView';
 import { SettingsModal } from './components/SettingsModal';
-import { ContactsView } from './components/ContactsView';
 import { WallpaperView } from './components/WallpaperView';
 import { RightMenuDrawer } from './components/RightMenuDrawer';
 import { ImagesGalleryView } from './components/ImagesGalleryView';
-import { SpaceUploadedFile, SpaceView } from './components/SpaceView';
 import { LoginScreen } from './components/LoginScreen';
-import { ShareNovaModal } from './components/ShareNovaModal';
+import { RotatingEarthWallpaper } from './components/RotatingEarthWallpaper';
+import { HistoryView } from './components/HistoryView';
 
 const GUEST_STORAGE_KEY = 'nova_guest_workspace_v2';
-const GUEST_CONTACTS_KEY = 'nova_guest_contacts_v1';
 const GUEST_SESSION_KEY = 'nova_guest_session_v1';
 const VOICE_SPEED_KEY = 'nova_voice_speed_v1';
 const MEMORY_PREFIX = 'nova_memory_v1_';
-const CONTACTS_PERMISSION_PREFIX = 'nova_contacts_permission_v1_';
 const WALLPAPER_STATE_PREFIX = 'nova_wallpaper_state_v1_';
 const REPLY_CACHE_KEY = 'nova_reply_cache_v1';
 const REPLY_CACHE_LIMIT = 30;
@@ -192,25 +180,33 @@ function extractMemoryFromPrompt(prompt: string, prev: NovaMemory): NovaMemory {
   const next: NovaMemory = { ...prev, pastNotes: [...prev.pastNotes] };
   let changed = false;
 
-  const nameMatch = clean.match(/\b(?:my name is|call me|i am called)\s+([A-Za-z][A-Za-z\s'-]{1,30})(?:[.!,]|$)/i);
-  if (nameMatch?.[1]) {
+  const nameMatch =
+    clean.match(/\b(?:my name is|call me|i am called|remember my name is)\s+([A-Za-z][A-Za-z\s'-]{1,30})(?:[.!,?]|$)/i) ||
+    clean.match(/\b(?:i'm|im|i am)\s+([A-Z][a-z]{1,20}(?:\s+[A-Z][a-z]{1,20})?)(?:[.!,?]|$)/);
+  const ignoredNames = new Set([
+    'Good', 'Fine', 'Great', 'Happy', 'Sad', 'Tired', 'Ready', 'Here', 'Back',
+    'Sorry', 'Okay', 'Ok', 'New', 'Asking', 'Looking', 'Trying', 'Going', 'Doing',
+  ]);
+  if (nameMatch?.[1] && !ignoredNames.has(nameMatch[1].trim())) {
     next.name = nameMatch[1].trim();
     changed = true;
   }
 
-  const schoolMatch = clean.match(/\b(?:my school is|i attend|i study at|i go to)\s+([A-Za-z0-9\s.&'-]{2,50})(?:[.!,]|$)/i);
+  const schoolMatch = clean.match(/\b(?:my school is|i attend|i study at|i go to)\s+([A-Za-z0-9\s.&'-]{2,50})(?:[.!,?]|$)/i);
   if (schoolMatch?.[1] && !/^(bed|sleep|home|work|church|mosque|market)$/i.test(schoolMatch[1].trim())) {
     next.school = schoolMatch[1].trim();
     changed = true;
   }
 
-  const bizMatch = clean.match(/\b(?:my business is|i run|my company is|i sell|i own)\s+([A-Za-z0-9\s.&'-]{2,60})(?:[.!,]|$)/i);
+  const bizMatch = clean.match(/\b(?:my business is|i run|my company is|i sell|i own)\s+([A-Za-z0-9\s.&'-]{2,60})(?:[.!,?]|$)/i);
   if (bizMatch?.[1]) {
     next.business = bizMatch[1].trim();
     changed = true;
   }
 
-  const styleMatch = clean.match(/\b(?:favourite style|favorite style|i prefer|i love)\s+(anime|realistic|3d cartoon|cinematic|poster|logo|minimalist|dark)\b/i);
+  const styleMatch =
+    clean.match(/\b(?:my\s+(?:favourite|favorite)\s+style\s+is|favourite\s+style\s+is|favorite\s+style\s+is|my\s+style\s+is|my\s+vibe\s+is)\s+([A-Za-z0-9\s,&'-]{2,50})(?:[.!,?]|$)/i) ||
+    clean.match(/\b(?:favourite style|favorite style|i prefer|i love|talk to me like|keep replies)\s+(anime|realistic|3d cartoon|cinematic|poster|logo|minimalist|dark|casual|funny|chill|short|detailed|friendly|neon purple)\b/i);
   if (styleMatch?.[1]) {
     next.favouriteStyle = styleMatch[1].trim();
     changed = true;
@@ -222,10 +218,10 @@ function extractMemoryFromPrompt(prompt: string, prev: NovaMemory): NovaMemory {
     changed = true;
   }
 
-  if (clean.length >= 16 && !/^call\s+/i.test(clean)) {
+  if (clean.length >= 16 && !/^call\s+/i.test(clean) && !/\bwhat(?:'s| is) my name\b/i.test(clean)) {
     const snippet = clean.slice(0, 90);
     if (!next.pastNotes.includes(snippet)) {
-      next.pastNotes = [snippet, ...next.pastNotes].slice(0, 8);
+      next.pastNotes = [snippet, ...next.pastNotes].slice(0, 10);
       changed = true;
     }
   }
@@ -234,17 +230,6 @@ function extractMemoryFromPrompt(prompt: string, prev: NovaMemory): NovaMemory {
     next.updatedAtMs = Date.now();
   }
   return changed ? next : prev;
-}
-
-function formatMemorySummary(mem: NovaMemory): string {
-  const parts: string[] = [];
-  if (mem.name) parts.push(`Name: ${mem.name}`);
-  if (mem.school) parts.push(`School: ${mem.school}`);
-  if (mem.business) parts.push(`Business: ${mem.business}`);
-  if (mem.favouriteStyle) parts.push(`Favourite style: ${mem.favouriteStyle}`);
-  if (mem.preferredLanguage) parts.push(`Preferred language: ${mem.preferredLanguage}`);
-  if (mem.pastNotes.length > 0) parts.push(`Recent topics: ${mem.pastNotes.slice(0, 3).join('; ')}`);
-  return parts.join(' | ');
 }
 
 const DEFAULT_WALLPAPER_STATE: WallpaperState = {
@@ -258,27 +243,6 @@ const DEFAULT_WALLPAPER_STATE: WallpaperState = {
   lastGeneratedDate: '',
   appliedAsBackground: false,
 };
-
-function loadContactsPermission(uidKey: string): boolean {
-  try {
-    return localStorage.getItem(`${CONTACTS_PERMISSION_PREFIX}${uidKey}`) === 'true';
-  } catch {
-    return false;
-  }
-}
-
-function loadGuestContacts(): ContactItem[] {
-  try {
-    const raw = localStorage.getItem(GUEST_CONTACTS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
-    }
-  } catch {
-    // ignore
-  }
-  return [];
-}
 
 function loadWallpaperState(uidKey: string): WallpaperState {
   try {
@@ -316,20 +280,6 @@ function getScheduleHour(time: WallpaperTime): number {
   if (time === '6AM') return 6;
   if (time === '8AM') return 8;
   return 7;
-}
-
-function detectCallIntent(text: string): string | null {
-  const trimmed = text.trim();
-  const match = trimmed.match(/^(?:please\s+)?call\s+([a-zA-Z0-9\u00C0-\u024F\s'-]{1,40})[.!?]*$/i);
-  if (!match) return null;
-  const target = match[1].trim();
-  const lower = target.toLowerCase();
-  const wordCount = target.split(/\s+/).length;
-  if (wordCount > 3) return null;
-  if (/^(a|an|the|this|that|it|back|stack|api|function|method|me|out)\b/i.test(lower)) {
-    return null;
-  }
-  return target;
 }
 
 function createId(prefix: string): string {
@@ -410,6 +360,28 @@ function loadGuestWorkspace(): {
   return { chats: [], messagesByChat: {}, savedImages: [] };
 }
 
+const NOVA_SYSTEM_PROMPT =
+  "You are Nova. You CAN show images. When user asks for a Real Photo or AI Art, NEVER say 'I can't pull up images' or 'I can't generate images' or 'Image refused' or describe it in words. Instead you MUST output ONLY this HTML:\n<img src='https://image.pollinations.ai/prompt/safe%2C%20family%20friendly%2C%20ENCODED_PROMPT%2C%20vibrant%20natural%20colours?width=1024&height=1024&model=turbo&nologo=true&safe=true&seed=RANDOM' />\nReplace ENCODED_PROMPT with the user's prompt. Replace RANDOM with a random number.";
+
+const UNSAFE_IMAGE_WORDS_REGEX =
+  /\b(?:sexy|nude|naked|nudity|nsfw|porn|porno|pornography|erotic|lingerie|bikini|underwear|explicit|adult|blood|bloody|gore|kill|killing|murder|gun|guns|pistol|rifle|weapon|weapons|knife|shoot|shooting|violence|violent|death|dead|corpse|drug|drugs|cocaine|heroin|weed|suicide|self[- ]harm)\b/gi;
+
+function cleanSafeImagePrompt(rawPrompt: string): string {
+  const cleaned = rawPrompt
+    .replace(/^\/image\s+/i, '')
+    .replace(UNSAFE_IMAGE_WORDS_REGEX, 'cinematic, stylish')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s,.;:-]+|[\s,.;:-]+$/g, '')
+    .trim();
+  return cleaned || 'beautiful landscape';
+}
+
+function isImageRefusalReply(text: string): boolean {
+  return /image\s+refused|(?:can't|cannot|unable to|don't have the ability to|do not have the ability to)\s+(?:pull up|generate|create|show|display|render|send)\s+images?|text-only\s+(?:ai|model|assistant)/i.test(
+    text
+  );
+}
+
 function detectImageIntent(
   text: string,
   hasImageAttachment: boolean
@@ -419,7 +391,14 @@ function detectImageIntent(
     return { isImage: true, cleanPrompt: trimmed.replace(/^\/image\s+/i, '').trim() };
   }
   if (
-    /^(?:please\s+)?(?:generate|create|draw|make|sketch|illustrate|design|paint|render|show(?:\s+me)?|give\s+me)\s+(?:an?\s+)?(?:labeled\s+|labelled\s+|colourful\s+|colorful\s+|educational\s+|scientific\s+|3d\s+|realistic\s+|detailed\s+|beautiful\s+)?(?:image|picture|photo|logo|poster|illustration|diagram|drawing|sketch|infographic|artwork|visual)(?:\s+(?:of|for|showing|with))?\b/i.test(
+    /^(?:real\s+photo|ai\s+art|digital\s+art|photo|picture|image|artwork|wallpaper)\s+(?:of|for|showing|with)\s+.+/i.test(
+      trimmed
+    )
+  ) {
+    return { isImage: true, cleanPrompt: trimmed };
+  }
+  if (
+    /^(?:please\s+)?(?:generate|create|draw|make|sketch|illustrate|design|paint|render|show(?:\s+me)?|give\s+me)\s+(?:an?\s+)?(?:labeled\s+|labelled\s+|colourful\s+|colorful\s+|educational\s+|scientific\s+|3d\s+|realistic\s+|real\s+|ai\s+|digital\s+|detailed\s+|beautiful\s+)?(?:image|picture|photo|logo|poster|illustration|diagram|drawing|sketch|infographic|artwork|art|visual)(?:\s+(?:of|for|showing|with))?\b/i.test(
       trimmed
     )
   ) {
@@ -433,7 +412,7 @@ function detectImageIntent(
     return { isImage: true, cleanPrompt: trimmed };
   }
   if (
-    /\b(?:labeled\s+diagram|labelled\s+diagram|educational\s+diagram|diagram\s+of|illustration\s+of|picture\s+of|infographic\s+of|drawing\s+of|sketch\s+of)\b/i.test(
+    /\b(?:labeled\s+diagram|labelled\s+diagram|educational\s+diagram|diagram\s+of|illustration\s+of|picture\s+of|photo\s+of|real\s+photo\s+of|ai\s+art\s+of|infographic\s+of|drawing\s+of|sketch\s+of)\b/i.test(
       trimmed
     )
   ) {
@@ -536,7 +515,7 @@ function detectBuilderIntent(
 export default function App() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
-  const [guestSessionActive, setGuestSessionActive] = useState<boolean>(false);
+  const [guestSessionActive, setGuestSessionActive] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [welcomeBanner, setWelcomeBanner] = useState<string | null>(null);
 
@@ -573,6 +552,7 @@ export default function App() {
   });
   const handleChangeImageGenMode = useCallback((mode: ImageGenMode) => {
     setImageGenMode(mode);
+    setImageMode(true);
     try {
       localStorage.setItem('nova_image_gen_mode_v1', mode);
     } catch {
@@ -594,25 +574,14 @@ export default function App() {
   const [isBuildingApp, setIsBuildingApp] = useState(false);
   const [streamingContent, setStreamingContent] = useState<string>('');
   const [voiceHint, setVoiceHint] = useState<string | null>(null);
-  const [shareModalOpen, setShareModalOpen] = useState(false);
   const replyCacheRef = useRef<Record<string, string>>(loadReplyCache());
 
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const [voiceModalOpen, setVoiceModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [rightMenuOpen, setRightMenuOpen] = useState(false);
   const [voiceSpeed, setVoiceSpeed] = useState<VoiceSpeed>(() => loadVoiceSpeed());
   const [memory, setMemory] = useState<NovaMemory>(() => loadMemory('guest'));
-
-  const [contactsPermission, setContactsPermission] = useState<boolean>(() =>
-    loadContactsPermission('guest')
-  );
-  const [guestContacts, setGuestContacts] = useState<ContactItem[]>(() => loadGuestContacts());
-  const [firestoreContacts, setFirestoreContacts] = useState<ContactItem[]>([]);
-  const [callPermissionPrompt, setCallPermissionPrompt] = useState<{
-    pendingPrompt: string;
-  } | null>(null);
 
   const [wallpaperState, setWallpaperState] = useState<WallpaperState>(() =>
     loadWallpaperState('guest')
@@ -665,7 +634,12 @@ export default function App() {
 
   // Listen to Firebase Auth state
   useEffect(() => {
+    const readyFallbackTimer = window.setTimeout(() => {
+      setAuthReady(true);
+    }, 1500);
+
     const unsub = onAuthStateChanged(auth, async (user) => {
+      window.clearTimeout(readyFallbackTimer);
       setAuthUser(user);
       setAuthReady(true);
 
@@ -677,15 +651,12 @@ export default function App() {
         setGuestMessagesByChat(stored.messagesByChat);
         setSavedImages(stored.savedImages);
         setFirestoreMessages([]);
-        setFirestoreContacts([]);
-        setContactsPermission(loadContactsPermission('guest'));
         setWallpaperState(loadWallpaperState('guest'));
         setMemory(loadMemory('guest'));
         setActiveChatId(null);
         return;
       }
 
-      setContactsPermission(loadContactsPermission(user.uid));
       setWallpaperState(loadWallpaperState(user.uid));
       const userMem = loadMemory(user.uid);
       if (!userMem.name && user.displayName) {
@@ -712,18 +683,45 @@ export default function App() {
         return;
       }
 
-      const today = getTodayDateKey();
-      const userDocPath = `users/${user.uid}`;
-      const userRef = doc(db, 'users', user.uid);
+      setProfile((prev) => ({
+        ...prev,
+        uid: user.uid,
+        displayName: user.displayName || user.email?.split('@')[0] || 'Nova User',
+        email: user.email || '',
+        photoURL: user.photoURL || '',
+      }));
+    });
 
+    return () => {
+      window.clearTimeout(readyFallbackTimer);
+      unsub();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const userDocReadyPromiseRef = useRef<Promise<void>>(Promise.resolve());
+
+  // Ensure user doc exists and subscribe to Firestore user profile & chats (verified users only)
+  useEffect(() => {
+    if (!authReady || !authUser || !authUser.emailVerified) return;
+
+    let cancelled = false;
+    let unsubUser: (() => void) | undefined;
+    let unsubChats: (() => void) | undefined;
+
+    const uid = authUser.uid;
+    const today = getTodayDateKey();
+    const userRef = doc(db, 'users', uid);
+
+    const initAndSubscribe = async () => {
       try {
         const snap = await getDoc(userRef);
         if (!snap.exists()) {
           const initialProfile: UserProfile = {
-            uid: user.uid,
-            displayName: user.displayName || 'Nova User',
-            email: user.email || '',
-            photoURL: user.photoURL || '',
+            uid,
+            displayName: (authUser.displayName || authUser.email?.split('@')[0] || 'Nova User').slice(0, 120),
+            email: (authUser.email || 'user@nova.app').slice(0, 200),
+            photoURL: (authUser.photoURL || '').slice(0, 500),
             plan: 'free',
             language: profile.language || 'en',
             voiceName: profile.voiceName || 'Kore',
@@ -736,137 +734,79 @@ export default function App() {
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
-          setProfile(initialProfile);
+          if (!cancelled) setProfile(initialProfile);
         } else {
           const data = snap.data();
-          const isSameDay = data.lastUsageDate === today;
-          if (!isSameDay) {
+          if (data.lastUsageDate !== today) {
             await updateDoc(userRef, {
               dailyChatCount: 0,
               dailyImageCount: 0,
               lastUsageDate: today,
               updatedAt: serverTimestamp(),
-            });
+            }).catch(() => undefined);
           }
         }
       } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, userDocPath);
+        console.warn('Firestore user profile sync skipped:', err);
       }
-    });
 
-    return () => unsub();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      if (cancelled) return;
 
-  // Subscribe to Firestore user profile & chats (verified users only)
-  useEffect(() => {
-    if (!authReady || !authUser || !authUser.emailVerified) return;
-
-    const uid = authUser.uid;
-    const today = getTodayDateKey();
-    const userPath = `users/${uid}`;
-    const userRef = doc(db, 'users', uid);
-
-    void getDoc(userRef)
-      .then((snap) => {
-        if (!snap.exists()) {
-          return setDoc(userRef, {
+      unsubUser = onSnapshot(
+        userRef,
+        (snap) => {
+          if (!snap.exists()) return;
+          const data = snap.data();
+          const isSameDay = data.lastUsageDate === today;
+          setProfile({
             uid,
-            displayName: authUser.displayName || authUser.email?.split('@')[0] || 'Nova User',
-            email: authUser.email || '',
-            photoURL: authUser.photoURL || '',
-            plan: 'free',
-            language: profile.language || 'en',
-            voiceName: profile.voiceName || 'Kore',
-            dailyChatCount: 0,
-            dailyImageCount: 0,
-            lastUsageDate: today,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
+            displayName: String(authUser.displayName || data.displayName || authUser.email?.split('@')[0] || 'Nova User'),
+            email: String(authUser.email || data.email || ''),
+            photoURL: String(authUser.photoURL || data.photoURL || ''),
+            plan: data.plan === 'premium' ? 'premium' : 'free',
+            language: (data.language as LanguageCode) || 'en',
+            voiceName: (data.voiceName as VoiceName) || 'Kore',
+            dailyChatCount: isSameDay ? Number(data.dailyChatCount || 0) : 0,
+            dailyImageCount: isSameDay ? Number(data.dailyImageCount || 0) : 0,
+            lastUsageDate: isSameDay ? String(data.lastUsageDate) : today,
           });
-        }
-        return undefined;
-      })
-      .catch(() => undefined);
-    const unsubUser = onSnapshot(
-      doc(db, 'users', uid),
-      (snap) => {
-        if (!snap.exists()) return;
-        const data = snap.data();
-        const isSameDay = data.lastUsageDate === today;
-        setProfile({
-          uid,
-          displayName: String(authUser.displayName || data.displayName || authUser.email?.split('@')[0] || 'Nova User'),
-          email: String(authUser.email || data.email || ''),
-          photoURL: String(authUser.photoURL || data.photoURL || ''),
-          plan: data.plan === 'premium' ? 'premium' : 'free',
-          language: (data.language as LanguageCode) || 'en',
-          voiceName: (data.voiceName as VoiceName) || 'Kore',
-          dailyChatCount: isSameDay ? Number(data.dailyChatCount || 0) : 0,
-          dailyImageCount: isSameDay ? Number(data.dailyImageCount || 0) : 0,
-          lastUsageDate: isSameDay ? String(data.lastUsageDate) : today,
-        });
-      },
-      (error) => handleFirestoreError(error, OperationType.GET, userPath)
-    );
+        },
+        (error) => console.warn('Firestore user listener warning:', error)
+      );
 
-    const chatsPath = `users/${uid}/chats`;
-    const chatsQuery = query(collection(db, 'users', uid, 'chats'), where('userId', '==', uid));
-    const unsubChats = onSnapshot(
-      chatsQuery,
-      (snapshot) => {
-        const loaded: ChatSession[] = snapshot.docs.map((d) => {
-          const data = d.data();
-          const updatedAtMs =
-            data.updatedAt && typeof data.updatedAt.toMillis === 'function'
-              ? data.updatedAt.toMillis()
-              : Date.now();
-          return {
-            id: d.id,
-            userId: String(data.userId || uid),
-            title: String(data.title || 'New Chat'),
-            lastMessagePreview: String(data.lastMessagePreview || ''),
-            updatedAtMs,
-          };
-        });
-        loaded.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
-        setChats(loaded);
-      },
-      (error) => handleFirestoreError(error, OperationType.LIST, chatsPath)
-    );
+      const chatsQuery = query(collection(db, 'users', uid, 'chats'), where('userId', '==', uid));
+      unsubChats = onSnapshot(
+        chatsQuery,
+        (snapshot) => {
+          const loaded: ChatSession[] = snapshot.docs.map((d) => {
+            const data = d.data();
+            const updatedAtMs =
+              data.updatedAt && typeof data.updatedAt.toMillis === 'function'
+                ? data.updatedAt.toMillis()
+                : Date.now();
+            return {
+              id: d.id,
+              userId: String(data.userId || uid),
+              title: String(data.title || 'New Chat'),
+              lastMessagePreview: String(data.lastMessagePreview || ''),
+              updatedAtMs,
+            };
+          });
+          loaded.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
+          setChats(loaded);
+        },
+        (error) => console.warn('Firestore chats listener warning:', error)
+      );
+    };
 
-    const contactsPath = `users/${uid}/contacts`;
-    const contactsQuery = query(
-      collection(db, 'users', uid, 'contacts'),
-      where('userId', '==', uid)
-    );
-    const unsubContacts = onSnapshot(
-      contactsQuery,
-      (snapshot) => {
-        const loaded: ContactItem[] = snapshot.docs.map((d) => {
-          const data = d.data();
-          const createdAtMs =
-            data.createdAt && typeof data.createdAt.toMillis === 'function'
-              ? data.createdAt.toMillis()
-              : Date.now();
-          return {
-            id: d.id,
-            name: String(data.name || ''),
-            phone: String(data.phone || ''),
-            createdAtMs,
-          };
-        });
-        loaded.sort((a, b) => b.createdAtMs - a.createdAtMs);
-        setFirestoreContacts(loaded);
-      },
-      (error) => handleFirestoreError(error, OperationType.LIST, contactsPath)
-    );
+    userDocReadyPromiseRef.current = initAndSubscribe();
 
     return () => {
-      unsubUser();
-      unsubChats();
-      unsubContacts();
+      cancelled = true;
+      unsubUser?.();
+      unsubChats?.();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authReady, authUser]);
 
   // Subscribe to Firestore messages for active chat & populate savedImages
@@ -877,7 +817,6 @@ export default function App() {
     }
 
     const uid = authUser.uid;
-    const messagesPath = `users/${uid}/chats/${activeChatId}/messages`;
     const msgQuery = query(
       collection(db, 'users', uid, 'chats', activeChatId, 'messages'),
       where('userId', '==', uid)
@@ -910,7 +849,7 @@ export default function App() {
         list.sort((a, b) => a.createdAtMs - b.createdAtMs);
         setFirestoreMessages(list);
       },
-      (error) => handleFirestoreError(error, OperationType.LIST, messagesPath)
+      (error) => console.warn('Firestore messages listener warning:', error)
     );
 
     return () => unsub();
@@ -936,18 +875,6 @@ export default function App() {
     guestMessagesByChat,
     optimisticMessagesByChat,
   ]);
-
-  const activeContacts = canUseFirestore ? firestoreContacts : guestContacts;
-
-  // Persist guest contacts when Firestore isn't active
-  useEffect(() => {
-    if (canUseFirestore) return;
-    try {
-      localStorage.setItem(GUEST_CONTACTS_KEY, JSON.stringify(guestContacts));
-    } catch {
-      // ignore
-    }
-  }, [canUseFirestore, guestContacts]);
 
   // Collect saved real images from current messages as well (exclude legacy SVG placeholders)
   const allHistoryImages = useMemo(() => {
@@ -975,32 +902,6 @@ export default function App() {
     });
     return Array.from(map.values()).sort((a, b) => b.createdAtMs - a.createdAtMs);
   }, [savedImages, activeMessages]);
-
-  const spaceUploadedFiles = useMemo(() => {
-    const map = new Map<string, SpaceUploadedFile>();
-    const allMsgs = canUseFirestore
-      ? activeMessages
-      : Object.values(guestMessagesByChat).flat();
-    allMsgs.forEach((m) => {
-      if (m.role === 'user' && m.imageDataUrl) {
-        map.set(m.id, {
-          id: m.id,
-          chatId: m.chatId,
-          name: m.content.slice(0, 60) || 'Uploaded file',
-          dataUrl: m.imageDataUrl,
-          createdAtMs: m.createdAtMs,
-        });
-      }
-    });
-    return Array.from(map.values()).sort((a, b) => b.createdAtMs - a.createdAtMs);
-  }, [canUseFirestore, activeMessages, guestMessagesByChat]);
-
-  const todayKey = getTodayDateKey();
-  const dailyUsed = profile.lastUsageDate === todayKey ? profile.dailyChatCount : 0;
-  const dailyImageUsed = profile.lastUsageDate === todayKey ? profile.dailyImageCount : 0;
-  const remainingFreeChats = Math.max(0, FREE_DAILY_LIMIT - dailyUsed);
-  const isChatLimitReached = profile.plan === 'free' && dailyUsed >= FREE_DAILY_LIMIT;
-  const isImageLimitReached = profile.plan === 'free' && dailyImageUsed >= FREE_IMAGE_LIMIT;
 
   const filteredChats = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -1091,14 +992,13 @@ export default function App() {
   ) => {
     setProfile((prev) => ({ ...prev, ...patch }));
     if (!canUseFirestore || !authUser) return;
-    const path = `users/${authUser.uid}`;
     try {
       await updateDoc(doc(db, 'users', authUser.uid), {
         ...patch,
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
+      console.warn('Preference update skipped:', err);
     }
   };
 
@@ -1116,7 +1016,6 @@ export default function App() {
     }));
 
     if (!canUseFirestore || !authUser) return;
-    const path = `users/${authUser.uid}`;
     try {
       await updateDoc(doc(db, 'users', authUser.uid), {
         dailyChatCount: nextChatCount,
@@ -1125,7 +1024,7 @@ export default function App() {
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
+      console.warn('Usage counter sync skipped:', err);
     }
   };
 
@@ -1158,62 +1057,6 @@ export default function App() {
     saveMemoryToStorage(storageUidKey, cleared);
   };
 
-  const handleGrantContactsPermission = () => {
-    setContactsPermission(true);
-    try {
-      localStorage.setItem(`${CONTACTS_PERMISSION_PREFIX}${storageUidKey}`, 'true');
-    } catch {
-      // ignore
-    }
-    if (callPermissionPrompt?.pendingPrompt) {
-      const promptToRun = callPermissionPrompt.pendingPrompt;
-      setCallPermissionPrompt(null);
-      void sendPrompt(promptToRun, false, true);
-    }
-  };
-
-  const handleAddContact = async (name: string, phone: string) => {
-    const cleanName = name.trim().slice(0, 120);
-    const cleanPhone = phone.trim().slice(0, 40);
-    if (!canUseFirestore || !authUser) {
-      const item: ContactItem = {
-        id: createId('ct'),
-        name: cleanName,
-        phone: cleanPhone,
-        createdAtMs: Date.now(),
-      };
-      setGuestContacts((prev) => [item, ...prev]);
-      return;
-    }
-    const uid = authUser.uid;
-    const contactId = createId('ct');
-    const contactPath = `users/${uid}/contacts/${contactId}`;
-    try {
-      await setDoc(doc(db, 'users', uid, 'contacts', contactId), {
-        userId: uid,
-        name: cleanName,
-        phone: cleanPhone,
-        createdAt: serverTimestamp(),
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, contactPath);
-    }
-  };
-
-  const handleDeleteContact = async (id: string) => {
-    if (!canUseFirestore || !authUser) {
-      setGuestContacts((prev) => prev.filter((c) => c.id !== id));
-      return;
-    }
-    const uid = authUser.uid;
-    const contactPath = `users/${uid}/contacts/${id}`;
-    try {
-      await deleteDoc(doc(db, 'users', uid, 'contacts', id));
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, contactPath);
-    }
-  };
-
   const updateWallpaperState = (patch: Partial<WallpaperState>) => {
     setWallpaperState((prev) => {
       const next = { ...prev, ...patch };
@@ -1222,57 +1065,48 @@ export default function App() {
     });
   };
 
+  const wallpaperAttemptedDateRef = useRef<string>('');
+
   const handleGenerateWallpaper = async (style: WallpaperStyle) => {
     if (isGeneratingWallpaper) return;
     setIsGeneratingWallpaper(true);
     setWallpaperError(null);
+    const seed = Date.now();
     try {
       const res = await fetch('/api/wallpaper', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ style, seed: Date.now() }),
+        body: JSON.stringify({ style, seed }),
       });
       const data = (await res.json().catch(() => ({}))) as {
         imageUrl?: string | null;
         title?: string;
         quote?: string;
-        error?: string;
       };
 
       const title = data.title || `${style} Horizon`;
       const quote = data.quote || 'Begin today with clarity and calm.';
-
-      if (!res.ok || !data.imageUrl) {
-        const friendlyErr =
-          data.error && !/http\s*\d{3}/i.test(data.error)
-            ? data.error
-            : 'Daily wallpaper generation is currently unavailable right now.';
-        setWallpaperError(friendlyErr);
-        updateWallpaperState({
-          style,
-          currentImageUrl: '',
-          currentTitle: title,
-          currentQuote: quote,
-        });
-        return;
-      }
+      const directFallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(
+        `safe, family friendly, ${style} serene luxury vertical 9:16 mobile wallpaper, vibrant natural colours`
+      )}?width=720&height=1280&model=turbo&nologo=true&safe=true&seed=${seed}`;
 
       updateWallpaperState({
         style,
-        currentImageUrl: data.imageUrl,
+        currentImageUrl: data.imageUrl || directFallbackUrl,
         currentTitle: title,
         currentQuote: quote,
         lastGeneratedDate: getTodayDateKey(),
       });
-    } catch (err) {
-      const realErr =
-        err instanceof Error && err.message.trim()
-          ? err.message.trim()
-          : 'Wallpaper image generation failed.';
-      setWallpaperError(realErr);
+    } catch {
+      const directFallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(
+        `safe, family friendly, ${style} serene luxury vertical 9:16 mobile wallpaper, vibrant natural colours`
+      )}?width=720&height=1280&model=turbo&nologo=true&safe=true&seed=${seed}`;
       updateWallpaperState({
         style,
-        currentImageUrl: '',
+        currentImageUrl: directFallbackUrl,
+        currentTitle: `${style} Horizon`,
+        currentQuote: 'Begin today with clarity and calm.',
+        lastGeneratedDate: getTodayDateKey(),
       });
     } finally {
       setIsGeneratingWallpaper(false);
@@ -1283,11 +1117,15 @@ export default function App() {
   useEffect(() => {
     const checkSchedule = () => {
       if (!wallpaperState.autoEnabled || !wallpaperState.permissionGranted) return;
-      if (isGeneratingWallpaper) return;
       const nowHour = new Date().getHours();
       const targetHour = getScheduleHour(wallpaperState.scheduleTime);
       const today = getTodayDateKey();
-      if (nowHour >= targetHour && wallpaperState.lastGeneratedDate !== today) {
+      if (
+        nowHour >= targetHour &&
+        wallpaperState.lastGeneratedDate !== today &&
+        wallpaperAttemptedDateRef.current !== today
+      ) {
+        wallpaperAttemptedDateRef.current = today;
         void handleGenerateWallpaper(wallpaperState.style);
       }
     };
@@ -1302,7 +1140,6 @@ export default function App() {
     wallpaperState.scheduleTime,
     wallpaperState.lastGeneratedDate,
     wallpaperState.style,
-    isGeneratingWallpaper,
   ]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1339,7 +1176,6 @@ export default function App() {
     }
 
     const uid = authUser.uid;
-    const chatPath = `users/${uid}/chats/${chatId}`;
     try {
       const msgSnap = await getDocs(
         query(collection(db, 'users', uid, 'chats', chatId, 'messages'), where('userId', '==', uid))
@@ -1349,7 +1185,7 @@ export default function App() {
       batch.delete(doc(db, 'users', uid, 'chats', chatId));
       await batch.commit();
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, chatPath);
+      console.warn('Delete chat failed:', err);
     }
   };
 
@@ -1362,7 +1198,6 @@ export default function App() {
       return;
     }
     const uid = authUser.uid;
-    const chatsPath = `users/${uid}/chats`;
     try {
       const chatSnap = await getDocs(
         query(collection(db, 'users', uid, 'chats'), where('userId', '==', uid))
@@ -1380,7 +1215,7 @@ export default function App() {
         await batch.commit();
       }
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, chatsPath);
+      console.warn('Clear history failed:', err);
     }
   };
 
@@ -1452,17 +1287,21 @@ export default function App() {
     }
 
     const uid = authUser.uid;
-    const chatPath = `users/${uid}/chats/${newChatId}`;
     setActiveChatId(newChatId);
-    const persistPromise = setDoc(doc(db, 'users', uid, 'chats', newChatId), {
-      userId: uid,
-      title,
-      lastMessagePreview: preview,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    }).catch((err) => {
-      handleFirestoreError(err, OperationType.CREATE, chatPath);
-    });
+    const persistPromise = userDocReadyPromiseRef.current
+      .catch(() => undefined)
+      .then(() =>
+        setDoc(doc(db, 'users', uid, 'chats', newChatId), {
+          userId: uid,
+          title,
+          lastMessagePreview: preview,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+      )
+      .catch((err) => {
+        console.warn('Chat session persistence skipped:', err);
+      });
     return { chatId: newChatId, persistPromise };
   };
 
@@ -1491,13 +1330,16 @@ export default function App() {
         ...prev,
         [chatId]: [...(prev[chatId] || []), created],
       }));
+      const previewText = /<img\b/i.test(msg.content)
+        ? (msg.imagePrompt || 'Generated image').slice(0, 120)
+        : msg.content.slice(0, 120);
       setChats((prev) =>
         prev
           .map((c) =>
             c.id === chatId
               ? {
                   ...c,
-                  lastMessagePreview: msg.content.slice(0, 120),
+                  lastMessagePreview: previewText,
                   updatedAtMs: createdAtMs,
                 }
               : c
@@ -1508,7 +1350,6 @@ export default function App() {
     }
 
     const uid = authUser.uid;
-    const msgPath = `users/${uid}/chats/${chatId}/messages/${messageId}`;
     try {
       const payload: Record<string, unknown> = {
         userId: uid,
@@ -1536,92 +1377,96 @@ export default function App() {
       }
       await setDoc(doc(db, 'users', uid, 'chats', chatId, 'messages', messageId), payload);
       removeOptimisticMessage(chatId, messageId);
+      const previewText = /<img\b/i.test(msg.content)
+        ? (msg.imagePrompt || 'Generated image').slice(0, 120)
+        : msg.content.slice(0, 120);
       await updateDoc(doc(db, 'users', uid, 'chats', chatId), {
-        lastMessagePreview: msg.content.slice(0, 120),
+        lastMessagePreview: previewText,
         updatedAt: serverTimestamp(),
       });
       return messageId;
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, msgPath);
+      console.warn('Message persistence skipped:', err);
+      return messageId;
     }
+  };
+
+  const buildPollinationsImageUrl = (
+    promptText: string,
+    _genMode: ImageGenMode,
+    _style?: ImageStyle,
+    seed?: number
+  ): string => {
+    const cleanThing = cleanSafeImagePrompt(promptText);
+    const seedValue = seed ?? Date.now();
+    return `https://image.pollinations.ai/prompt/${encodeURIComponent(
+      `safe, family friendly, ${cleanThing}, vibrant natural colours`
+    )}?width=1024&height=1024&model=turbo&nologo=true&safe=true&seed=${seedValue}`;
   };
 
   const runImageGeneration = async (
     chatId: string,
     promptText: string,
     count: 1 | 4,
-    sourceAttachment: typeof attachedImage,
-    overrides?: { styleOverride?: ImageStyle; ratioOverride?: AspectRatio; genModeOverride?: ImageGenMode }
+    _sourceAttachment: typeof attachedImage,
+    overrides?: { styleOverride?: ImageStyle; ratioOverride?: AspectRatio; genModeOverride?: ImageGenMode },
+    afterPromise: Promise<unknown> = Promise.resolve()
   ) => {
-    setIsGeneratingImage(true);
     setImageStudioError(null);
     const activeGenMode = overrides?.genModeOverride || imageGenMode;
-    try {
-      const res = await fetch('/api/image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: promptText,
-          aspectRatio: overrides?.ratioOverride || aspectRatio,
-          style: overrides?.styleOverride || imageStyle,
-          genMode: activeGenMode,
-          count,
-          sourceImage: sourceAttachment
-            ? { base64: sourceAttachment.base64, mimeType: sourceAttachment.mimeType }
-            : undefined,
-        }),
+    const activeStyle = overrides?.styleOverride || imageStyle;
+
+    const baseSeed = Date.now();
+    const urls: string[] =
+      count === 4
+        ? Array.from({ length: 4 }, (_, idx) =>
+            buildPollinationsImageUrl(promptText, activeGenMode, activeStyle, baseSeed + idx)
+          )
+        : [buildPollinationsImageUrl(promptText, activeGenMode, activeStyle, baseSeed)];
+
+    const assistantMsgId = createId('msg');
+    const assistantCreatedAtMs = Date.now();
+    const assistantMsgPayload: Omit<ChatMessage, 'id' | 'chatId' | 'createdAtMs'> = {
+      role: 'assistant',
+      kind: 'image',
+      content: `<img src='${urls[0]}' />`,
+      imageDataUrl: urls[0],
+      imageUrls: urls,
+      imagePrompt: promptText,
+    };
+
+    if (canUseFirestore) {
+      appendOptimisticMessage(chatId, {
+        id: assistantMsgId,
+        chatId,
+        ...assistantMsgPayload,
+        createdAtMs: assistantCreatedAtMs,
       });
-      const data = (await res.json().catch(() => ({}))) as {
-        error?: string;
-        imageUrl?: string;
-        imageUrls?: string[];
-        caption?: string;
-      };
-      if (!res.ok) {
-        const realImageErr =
-          data.error && !/aiza/i.test(data.error)
-            ? data.error
-            : 'Image generation failed. Please try again.';
-        throw new Error(realImageErr);
-      }
-
-      const urls: string[] = (
-        Array.isArray(data.imageUrls)
-          ? data.imageUrls
-          : data.imageUrl
-            ? [data.imageUrl]
-            : []
-      ).filter((u) => typeof u === 'string' && u.length > 0 && !u.startsWith('data:image/svg+xml'));
-
-      if (urls.length === 0) {
-        throw new Error('Image generation is currently unavailable right now.');
-      }
-
-      const msgId = await saveMessage(chatId, {
-        role: 'assistant',
-        kind: 'image',
-        content: data.caption || promptText,
-        imageDataUrl: urls[0],
-        imageUrls: urls,
-        imagePrompt: promptText,
-      });
-
-      if (urls[0]) {
-        const compressedThumb = await compressDataUrlForStorage(urls[0]);
-        setSavedImages((prev) => [
-          {
-            id: msgId,
-            chatId,
-            prompt: promptText,
-            imageUrl: compressedThumb,
-            createdAtMs: Date.now(),
-          },
-          ...prev.filter((item) => !item.imageUrl.startsWith('data:image/svg+xml')).slice(0, 29),
-        ]);
-      }
-    } finally {
-      setIsGeneratingImage(false);
+      void afterPromise
+        .catch(() => undefined)
+        .then(() =>
+          saveMessage(chatId, assistantMsgPayload, assistantMsgId, assistantCreatedAtMs)
+        )
+        .catch(() => undefined);
+    } else {
+      void saveMessage(chatId, assistantMsgPayload, assistantMsgId, assistantCreatedAtMs).catch(
+        () => undefined
+      );
     }
+
+    if (urls[0]) {
+      setSavedImages((prev) => [
+        {
+          id: assistantMsgId,
+          chatId,
+          prompt: promptText,
+          imageUrl: urls[0],
+          createdAtMs: assistantCreatedAtMs,
+        },
+        ...prev.filter((item) => !item.imageUrl.startsWith('data:image/svg+xml')).slice(0, 29),
+      ]);
+    }
+    setIsGeneratingImage(false);
   };
 
   const runBuildApp = async (
@@ -1708,13 +1553,12 @@ export default function App() {
     const isMiniApp = /^(calculator|to-do app|quiz app|music player|weather app)$/i.test(category);
     const nextPrompt = isMiniApp
       ? `Build a working interactive ${category}`
-      : `Build a modern ${category} website with contact form and WhatsApp button`;
+      : `Build a modern ${category} website with contact form`;
     void sendPrompt(nextPrompt);
   };
 
   const handleEditBuiltApp = async (editInstruction: string, currentHtml: string) => {
     if (isSending || isBuildingApp || !editInstruction.trim()) return;
-    if (isChatLimitReached) return;
     setIsSending(true);
     setActiveView('chat');
     try {
@@ -1733,66 +1577,11 @@ export default function App() {
 
   const sendPrompt = async (
     rawPrompt: string,
-    forceImageMode?: boolean,
-    bypassPermissionCheck?: boolean
+    forceImageMode?: boolean
   ) => {
     const currentAttachment = attachedImage;
     const raw = rawPrompt.trim();
     if (!raw || isSending) return;
-
-    const callTarget =
-      !forceImageMode && !imageMode && !currentAttachment ? detectCallIntent(raw) : null;
-
-    if (callTarget) {
-      if (!contactsPermission && !bypassPermissionCheck) {
-        setCallPermissionPrompt({ pendingPrompt: raw });
-        return;
-      }
-
-      setVoiceHint(null);
-      setInputText('');
-      setIsSending(true);
-      setActiveView('chat');
-
-      try {
-        const chatId = await ensureChatSession(raw);
-        await saveMessage(chatId, {
-          role: 'user',
-          kind: 'text',
-          content: raw,
-        });
-
-        const lowerTarget = callTarget.toLowerCase();
-        const exactMatch = activeContacts.find((c) => c.name.toLowerCase() === lowerTarget);
-        const partialMatch =
-          exactMatch ||
-          activeContacts.find(
-            (c) =>
-              c.name.toLowerCase().includes(lowerTarget) ||
-              lowerTarget.includes(c.name.toLowerCase())
-          );
-
-        if (partialMatch) {
-          await saveMessage(chatId, {
-            role: 'assistant',
-            kind: 'text',
-            content: `[[NOVA_CALL:${partialMatch.name}|${partialMatch.phone}]]\n\nTap the **Call** button when you're ready to call **${partialMatch.name}**.`,
-          });
-        } else {
-          await saveMessage(chatId, {
-            role: 'assistant',
-            kind: 'text',
-            content: `I couldn't find **${callTarget}** in your saved Contacts yet. Open **Contacts** in the sidebar to save their phone number, then say "Call ${callTarget}" again.`,
-          });
-        }
-      } catch {
-        // quiet recovery
-      } finally {
-        setIsSending(false);
-        bottomInputRef.current?.focus();
-      }
-      return;
-    }
 
     const lastAssistantMsg = [...activeMessages].reverse().find((m) => m.role === 'assistant');
     const lastAssistantAskedCategory = Boolean(
@@ -1805,7 +1594,6 @@ export default function App() {
         : { mode: 'none' as const, prompt: '' };
 
     if (builderIntent.mode !== 'none') {
-      if (isChatLimitReached) return;
       setVoiceHint(null);
       setInputText('');
       setIsSending(true);
@@ -1834,13 +1622,6 @@ export default function App() {
     const detected = detectImageIntent(raw, Boolean(currentAttachment));
     const useImage = forceImageMode ?? (imageMode || detected.isImage);
     const effectivePrompt = detected.cleanPrompt || raw;
-
-    if (useImage && isImageLimitReached) {
-      return;
-    }
-    if (!useImage && isChatLimitReached) {
-      return;
-    }
 
     setVoiceHint(null);
     setInputText('');
@@ -1879,9 +1660,15 @@ export default function App() {
 
     try {
       if (useImage) {
-        await persistUserMsgPromise;
-        await incrementUsage('image');
-        await runImageGeneration(chatId, effectivePrompt, 1, currentAttachment);
+        void incrementUsage('image').catch(() => undefined);
+        await runImageGeneration(
+          chatId,
+          effectivePrompt,
+          1,
+          currentAttachment,
+          undefined,
+          persistUserMsgPromise
+        );
         setImageMode(false);
       } else {
         const updatedMem = extractMemoryFromPrompt(raw, memory);
@@ -1891,7 +1678,7 @@ export default function App() {
         }
 
         // Non-blocking usage & cache check
-        void incrementUsage('chat');
+        void incrementUsage('chat').catch(() => undefined);
 
         const clientCacheKey = getClientReplyCacheKey(
           raw,
@@ -1933,76 +1720,116 @@ export default function App() {
           return;
         }
 
-        const conversationPayload = [
-          ...historyBefore.map((m) => ({ role: m.role, content: m.content })),
-          { role: 'user' as const, content: raw },
-        ];
+        const wantsLongReply =
+          /\b(long|detailed|detail|details|essay|in[- ]depth|explain\s+fully|step[- ]by[- ]step|comprehensive|elaborate|full\s+guide|everything\s+about)\b/i.test(
+            raw
+          );
 
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: conversationPayload,
-            uiLanguage: profile.language,
-            memory: updatedMem,
-            pastChatTitles: chats.slice(0, 6).map((c) => c.title),
-            attachment: currentAttachment
-              ? { base64: currentAttachment.base64, mimeType: currentAttachment.mimeType }
-              : undefined,
-          }),
-        });
+        const recentFour = historyBefore
+          .slice(-4)
+          .map((m) => `${m.role === 'assistant' ? 'Nova' : 'User'}: ${m.content.slice(0, 140)}`)
+          .join(' | ');
 
-        if (!res.ok || !res.body) {
-          const errData = (await res.json().catch(() => ({}))) as { error?: string };
-          const safeServerMsg =
-            errData.error && !/http\s*\d{3}|gemini request failed/i.test(errData.error)
-              ? errData.error
-              : "Nova couldn't connect to its AI service. Please try again.";
-          throw new Error(safeServerMsg);
-        }
+        const memorySnippet = [
+          updatedMem.name ? `Name: ${updatedMem.name}` : '',
+          updatedMem.favouriteStyle ? `Style: ${updatedMem.favouriteStyle}` : '',
+          updatedMem.preferredLanguage ? `Language: ${updatedMem.preferredLanguage}` : '',
+        ]
+          .filter(Boolean)
+          .join(', ');
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let accumulated = '';
-        let buffer = '';
+        const lengthRule = wantsLongReply ? 'Give a detailed reply.' : 'Keep normal text replies friendly and short (max 2-3 sentences).';
+        const modeHint = `Current image mode: ${imageGenMode === 'ai-art' ? 'digital art' : 'real photo'}.`;
+        const systemInstruction = `${NOVA_SYSTEM_PROMPT}\n${lengthRule} ${modeHint}${memorySnippet ? ` [${memorySnippet}]` : ''}`;
+        const userTurnPrompt = [
+          recentFour ? `Chat: ${recentFour}` : '',
+          `User: ${raw}`,
+          'Nova:',
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .slice(0, 750);
 
-        const processSseFrame = (frame: string) => {
-          for (const line of frame.split('\n')) {
-            if (!line.startsWith('data: ')) continue;
-            const jsonStr = line.slice(6).trim();
-            if (!jsonStr) continue;
-            const parsed = JSON.parse(jsonStr) as {
-              text?: string;
-              done?: boolean;
-              error?: string;
-            };
-            if (parsed.error) {
-              throw new Error(parsed.error);
+        const runPollinationsGet = async (
+          promptText: string,
+          modelName: string,
+          systemText?: string
+        ): Promise<string> => {
+          const url = new URL(`https://text.pollinations.ai/${encodeURIComponent(promptText)}`);
+          url.searchParams.set('model', modelName);
+          if (systemText) {
+            url.searchParams.set('system', systemText);
+          }
+          const controller = new AbortController();
+          const timer = window.setTimeout(() => controller.abort(new Error('Request timed out')), 14000);
+          try {
+            const res = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
+            const textBody = await res.text();
+            if (!res.ok) {
+              const retryAfter = Number(res.headers.get('retry-after') || '0');
+              const detail = textBody.trim().slice(0, 180) || res.statusText || 'Request failed';
+              const err = new Error(`HTTP ${res.status} (${modelName}): ${detail}`) as Error & {
+                status?: number;
+                retryAfter?: number;
+              };
+              err.status = res.status;
+              err.retryAfter = retryAfter;
+              throw err;
             }
-            if (parsed.text) {
-              accumulated += parsed.text;
-              setStreamingContent(accumulated);
+            const clean = textBody.trim();
+            if (!clean) {
+              throw new Error(`Empty response from ${modelName}`);
             }
+            return clean;
+          } finally {
+            window.clearTimeout(timer);
           }
         };
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
-          const frames = buffer.split('\n\n');
-          buffer = frames.pop() || '';
-          for (const frame of frames) {
-            processSseFrame(frame);
+        const runSameOriginChatGet = async (
+          promptText: string,
+          systemText?: string
+        ): Promise<string> => {
+          const apiUrl = new URL('/api/chat', window.location.origin);
+          apiUrl.searchParams.set('prompt', promptText);
+          if (systemText) {
+            apiUrl.searchParams.set('system', systemText);
+          }
+          const res = await fetch(apiUrl.toString(), {
+            method: 'GET',
+          });
+          const data = (await res.json().catch(() => ({}))) as {
+            success?: boolean;
+            reply?: string;
+            error?: string;
+          };
+          if (!res.ok || !data.reply) {
+            throw new Error(data.error || `Chat GET proxy failed (HTTP ${res.status})`);
+          }
+          return data.reply.trim();
+        };
+
+        let replyText = '';
+        try {
+          replyText = await runSameOriginChatGet(userTurnPrompt, systemInstruction);
+        } catch (proxyErr) {
+          console.warn('Same-origin chat GET proxy fallback triggered:', proxyErr);
+          try {
+            replyText = await runPollinationsGet(userTurnPrompt, 'openai-fast', systemInstruction);
+          } catch {
+            replyText = await runPollinationsGet(raw, 'openai', systemInstruction);
           }
         }
-        if (buffer.trim()) {
-          processSseFrame(buffer.trim());
-        }
 
-        const finalReply =
-          accumulated.trim() || "Nova couldn't connect to its AI service. Please try again.";
-        if (accumulated.trim() && clientCacheKey) {
+        let finalReply = replyText.trim();
+        if (isImageRefusalReply(finalReply)) {
+          const safePrompt = cleanSafeImagePrompt(raw);
+          const randomSeed = Date.now();
+          finalReply = `<img src='https://image.pollinations.ai/prompt/${encodeURIComponent(
+            `safe, family friendly, ${safePrompt}, vibrant natural colours`
+          )}?width=1024&height=1024&model=turbo&nologo=true&safe=true&seed=${randomSeed}' />`;
+        }
+        if (finalReply && clientCacheKey) {
           saveClientReplyCache(clientCacheKey, finalReply);
         }
 
@@ -2038,18 +1865,11 @@ export default function App() {
     } catch (err) {
       setStreamingContent('');
       setIsGeneratingImage(false);
-      const rawMessage = err instanceof Error ? err.message.trim() : '';
-      const isSafeFriendlyServerError =
-        Boolean(rawMessage) &&
-        rawMessage.startsWith('Nova') &&
-        !/http\s*\d{3}|gemini request failed|aiza/i.test(rawMessage);
-      const friendlyMessage = useImage
-        ? rawMessage && !/http\s*\d{3}|gemini request failed|aiza/i.test(rawMessage)
-          ? rawMessage
-          : 'Image generation is currently unavailable right now.'
-        : isSafeFriendlyServerError
-          ? rawMessage
-          : "Nova couldn't connect to its AI service. Please try again.";
+      console.error('Nova sendMessage error:', err);
+      const realError =
+        err instanceof Error && err.message.trim()
+          ? err.message.trim()
+          : 'Unable to reach Pollinations AI right now. Please try again.';
       if (activeSessionId) {
         const errMsgId = createId('msg');
         const errCreatedAtMs = Date.now();
@@ -2059,14 +1879,14 @@ export default function App() {
             chatId: activeSessionId,
             role: 'assistant',
             kind: 'text',
-            content: friendlyMessage,
+            content: realError,
             createdAtMs: errCreatedAtMs,
           });
           void persistUserMsgPromise
             .then(() =>
               saveMessage(
                 activeSessionId,
-                { role: 'assistant', kind: 'text', content: friendlyMessage },
+                { role: 'assistant', kind: 'text', content: realError },
                 errMsgId,
                 errCreatedAtMs
               )
@@ -2075,7 +1895,7 @@ export default function App() {
         } else {
           void saveMessage(
             activeSessionId,
-            { role: 'assistant', kind: 'text', content: friendlyMessage },
+            { role: 'assistant', kind: 'text', content: realError },
             errMsgId,
             errCreatedAtMs
           ).catch(() => undefined);
@@ -2103,10 +1923,6 @@ export default function App() {
     sourceAttachment: typeof attachedImage;
   }) => {
     if (isSending || isGeneratingImage) return;
-    if (isImageLimitReached) {
-      setImageStudioError(t.imageLimitReachedTitle);
-      return;
-    }
 
     const modePrefixMap: Record<ImageStudioMode, string> = {
       'Generate Image': '',
@@ -2120,37 +1936,28 @@ export default function App() {
     const fullPrompt = `${modePrefixMap[mode]}${prompt.trim()}`;
     setIsSending(true);
     setImageStudioError(null);
-    let targetChatId: string | null = null;
 
     try {
       const chatId = await ensureChatSession(prompt.trim());
-      targetChatId = chatId;
-      await saveMessage(chatId, {
+      const persistUserPromise = saveMessage(chatId, {
         role: 'user',
         kind: 'image',
         content: fullPrompt,
         imageDataUrl: sourceAttachment?.previewUrl,
       });
-      await incrementUsage('image');
-      await runImageGeneration(chatId, fullPrompt, 1, sourceAttachment, {
-        styleOverride: style,
-        ratioOverride: studioRatio,
-        genModeOverride: studioGenMode,
-      });
-    } catch (err) {
-      const rawErr = err instanceof Error ? err.message.trim() : '';
-      const friendlyError =
-        rawErr && !/http\s*\d{3}|gemini request failed/i.test(rawErr)
-          ? rawErr
-          : 'Image generation is currently unavailable right now.';
-      setImageStudioError(friendlyError);
-      if (targetChatId) {
-        await saveMessage(targetChatId, {
-          role: 'assistant',
-          kind: 'text',
-          content: friendlyError,
-        }).catch(() => undefined);
-      }
+      void incrementUsage('image').catch(() => undefined);
+      await runImageGeneration(
+        chatId,
+        fullPrompt,
+        1,
+        sourceAttachment,
+        {
+          styleOverride: style,
+          ratioOverride: studioRatio,
+          genModeOverride: studioGenMode,
+        },
+        persistUserPromise
+      );
     } finally {
       setIsSending(false);
     }
@@ -2158,32 +1965,12 @@ export default function App() {
 
   const handleCreateVariations = async (promptText: string) => {
     if (isSending) return;
-    if (isImageLimitReached) {
-      setImageStudioError(t.imageLimitReachedTitle);
-      return;
-    }
     setIsSending(true);
     setImageStudioError(null);
-    let targetChatId: string | null = null;
     try {
       const chatId = await ensureChatSession(promptText);
-      targetChatId = chatId;
-      await incrementUsage('image');
+      void incrementUsage('image').catch(() => undefined);
       await runImageGeneration(chatId, promptText, 4, null);
-    } catch (err) {
-      const rawErr = err instanceof Error ? err.message.trim() : '';
-      const friendlyError =
-        rawErr && !/http\s*\d{3}|gemini request failed/i.test(rawErr)
-          ? rawErr
-          : 'Image generation is currently unavailable right now.';
-      setImageStudioError(friendlyError);
-      if (targetChatId) {
-        await saveMessage(targetChatId, {
-          role: 'assistant',
-          kind: 'text',
-          content: friendlyError,
-        }).catch(() => undefined);
-      }
     } finally {
       setIsSending(false);
     }
@@ -2296,28 +2083,6 @@ export default function App() {
 
   const renderComposer = () => (
     <div className="w-full max-w-5xl mx-auto space-y-1.5">
-      {/* Limit Banner */}
-      {(isChatLimitReached || (imageMode && isImageLimitReached)) && (
-        <div className="rounded-2xl bg-[#0A0A0A] border border-[#BF5AF2]/55 px-3.5 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="min-w-0">
-            <div className="text-xs font-semibold text-white">
-              {imageMode && isImageLimitReached ? t.imageLimitReachedTitle : t.limitReachedTitle}
-            </div>
-            <div className="text-[11px] text-white/70 truncate">
-              {imageMode && isImageLimitReached ? t.imageLimitReachedDesc : t.limitReachedDesc}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => updateUserPreferences({ plan: 'premium' })}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <Crown className="w-3.5 h-3.5" />
-            <span>{t.upgradeToPremium}</span>
-          </button>
-        </div>
-      )}
-
       {/* Image Studio Controls above Chat Box when Image Mode is Active */}
       {imageMode && (
         <div className="rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/40 p-2.5 flex flex-col gap-2">
@@ -2355,10 +2120,8 @@ export default function App() {
                 </button>
               ))}
             </div>
-            <span className="text-[11px] font-mono tabular-nums text-white/65">
-              {profile.plan === 'premium'
-                ? t.unlimitedChats
-                : `${Math.max(0, FREE_IMAGE_LIMIT - dailyImageUsed)}/${FREE_IMAGE_LIMIT} ${t.imagesLeftToday}`}
+            <span className="text-[11px] text-[#BF5AF2]">
+              {imageGenMode === 'real-photo' ? 'Real Photo 📸' : 'AI Art 🎨'}
             </span>
           </div>
         </div>
@@ -2469,7 +2232,6 @@ export default function App() {
                 messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
               }, 160);
             }}
-            disabled={isChatLimitReached && !imageMode}
             placeholder={
               voiceHint
                 ? voiceHint
@@ -2479,7 +2241,7 @@ export default function App() {
                     ? t.imageInputPlaceholder
                     : t.inputPlaceholder
             }
-            className="flex-1 min-w-0 resize-none bg-transparent text-sm sm:text-[15px] text-white placeholder:text-white/45 focus:outline-none leading-5 py-2 px-1 max-h-28 overflow-y-auto disabled:opacity-50"
+            className="flex-1 min-w-0 resize-none bg-transparent text-sm sm:text-[15px] text-white placeholder:text-white/45 focus:outline-none leading-5 py-2 px-1 max-h-28 overflow-y-auto"
           />
 
           {/* Image Button */}
@@ -2543,9 +2305,9 @@ export default function App() {
   );
 
   const sidebarContent = (
-    <div className="flex flex-col h-full bg-[#0A0A0A] border-e border-[#A855F7]/35 w-[272px] shrink-0">
+    <div className="flex flex-col h-full bg-[#0A0A0A]/92 backdrop-blur-md border-e border-[#A855F7]/35 w-[300px] sm:w-[340px] max-w-[88vw] shrink-0">
       {/* Top: Nova Logo + Collapse */}
-      <div className="flex items-center justify-between gap-2 px-4 py-4">
+      <div className="flex items-center justify-between gap-2 px-4 py-3.5 shrink-0">
         <button
           type="button"
           onClick={handleNewChat}
@@ -2571,16 +2333,35 @@ export default function App() {
         </button>
       </div>
 
-      {/* Neon Purple New Chat Button */}
-      <div className="px-3.5 pb-3 space-y-2.5">
-        <button
-          type="button"
-          onClick={handleNewChat}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          <span>{t.newChat}</span>
-        </button>
+      {/* Neon Purple New Chat + Big History Buttons */}
+      <div className="px-3.5 pb-2.5 space-y-2 shrink-0">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleNewChat}
+            className="flex-1 flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-2xl text-sm font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>{t.newChat}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveView('history');
+              setMobileDrawerOpen(false);
+            }}
+            title="Open Full History"
+            className={`inline-flex items-center gap-1.5 px-3 py-2.5 rounded-2xl text-xs font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
+              activeView === 'history'
+                ? 'bg-[#A855F7]/25 border-[#BF5AF2] text-white'
+                : 'bg-black border-[#A855F7]/35 text-white/85 hover:text-white hover:border-[#BF5AF2]'
+            }`}
+          >
+            <History className="w-4 h-4 text-[#BF5AF2]" />
+            <span>Big View</span>
+          </button>
+        </div>
 
         {/* Chats / Images History Tab Switcher */}
         <div className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-black border border-[#A855F7]/30">
@@ -2593,7 +2374,7 @@ export default function App() {
                 : 'text-white/65 hover:text-white border border-transparent'
             }`}
           >
-            {t.chatsTab}
+            {t.chatsTab} ({chats.length})
           </button>
           <button
             type="button"
@@ -2604,7 +2385,7 @@ export default function App() {
                 : 'text-white/65 hover:text-white border border-transparent'
             }`}
           >
-            {t.imagesTab}
+            {t.imagesTab} ({allHistoryImages.length})
           </button>
         </div>
 
@@ -2622,11 +2403,11 @@ export default function App() {
         )}
       </div>
 
-      {/* History List OR Saved Images Gallery */}
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-2.5 py-1 space-y-1">
+      {/* Big Scrollable History List OR Saved Images Gallery */}
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-3 py-1.5 space-y-2">
         {historyTab === 'chats' ? (
           filteredChats.length === 0 ? (
-            <div className="px-3 py-6 text-xs text-white/55 leading-relaxed">
+            <div className="px-3 py-6 text-sm text-white/55 leading-relaxed">
               {t.historyEmpty}
             </div>
           ) : (
@@ -2649,25 +2430,34 @@ export default function App() {
                       setMobileDrawerOpen(false);
                     }
                   }}
-                  className={`group flex items-center justify-between gap-2 px-3 py-2.5 rounded-2xl text-xs transition-all cursor-pointer border ${
+                  className={`group flex items-start justify-between gap-2.5 px-3.5 py-3 rounded-2xl transition-all cursor-pointer border ${
                     isSelected
                       ? 'bg-black text-white border-[#BF5AF2] nova-active-glow'
-                      : 'text-white/75 hover:bg-black hover:text-white border-transparent hover:border-[#A855F7]/30'
+                      : 'bg-black/50 text-white/85 hover:bg-black hover:text-white border-[#A855F7]/15 hover:border-[#A855F7]/45'
                   }`}
                 >
-                  <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="flex items-start gap-2.5 min-w-0 flex-1">
                     <MessageSquare
-                      className={`w-3.5 h-3.5 shrink-0 ${
-                        isSelected ? 'text-[#BF5AF2]' : 'text-[#A855F7]/65'
+                      className={`w-4 h-4 shrink-0 mt-0.5 ${
+                        isSelected ? 'text-[#BF5AF2]' : 'text-[#A855F7]/75'
                       }`}
                     />
-                    <span className="truncate font-medium">{chat.title}</span>
+                    <div className="min-w-0 flex-1 space-y-0.5">
+                      <div className="text-sm font-medium truncate text-white">
+                        {chat.title}
+                      </div>
+                      {chat.lastMessagePreview && (
+                        <div className="text-xs text-white/55 truncate">
+                          {chat.lastMessagePreview}
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <button
                     type="button"
                     onClick={(e) => void handleDeleteChat(chat.id, e)}
                     aria-label={t.deleteChat}
-                    className="opacity-0 group-hover:opacity-100 p-1 rounded-lg text-white/55 hover:text-[#BF5AF2] transition-opacity shrink-0 cursor-pointer"
+                    className="opacity-70 md:opacity-0 md:group-hover:opacity-100 p-1.5 rounded-lg text-white/55 hover:text-[#BF5AF2] transition-opacity shrink-0 cursor-pointer"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -2753,24 +2543,8 @@ export default function App() {
         )}
       </div>
 
-      {/* Smart Features Nav: Contacts & Daily Wallpaper */}
+      {/* Core Features Nav: Ekere Wallpaper & Settings */}
       <div className="px-3.5 py-2 border-t border-[#A855F7]/25 grid grid-cols-2 gap-1.5">
-        <button
-          type="button"
-          onClick={() => {
-            setActiveView('contacts');
-            setMobileDrawerOpen(false);
-          }}
-          className={`flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-2xl text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap ${
-            activeView === 'contacts'
-              ? 'bg-black border-[#BF5AF2] text-white nova-active-glow'
-              : 'bg-black border-[#A855F7]/25 text-white/80 hover:text-white hover:border-[#BF5AF2]'
-          }`}
-        >
-          <Phone className="w-3.5 h-3.5 text-[#BF5AF2] shrink-0" />
-          <span>Contacts</span>
-        </button>
-
         <button
           type="button"
           onClick={() => {
@@ -2787,11 +2561,23 @@ export default function App() {
           }`}
         >
           <Wallpaper className="w-3.5 h-3.5 text-[#BF5AF2] shrink-0" />
-          <span>Wallpaper</span>
+          <span className="truncate">Ekere Wallpaper</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setSettingsModalOpen(true);
+            setMobileDrawerOpen(false);
+          }}
+          className="flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-2xl text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap bg-black border-[#A855F7]/25 text-white/80 hover:text-white hover:border-[#BF5AF2]"
+        >
+          <Settings className="w-3.5 h-3.5 text-[#BF5AF2] shrink-0" />
+          <span>{t.settings}</span>
         </button>
       </div>
 
-      {/* Bottom: User Profile + Sign Out + Upgrade to Premium Button */}
+      {/* Bottom: User Profile + Sign Out */}
       <div className="p-3.5 border-t border-[#A855F7]/25 space-y-2">
         <div className="flex items-center gap-2">
           <button
@@ -2863,17 +2649,6 @@ export default function App() {
             <span>{authUser ? t.signOut : 'Exit Guest'}</span>
           </button>
         </div>
-
-        {profile.plan === 'free' && (
-          <button
-            type="button"
-            onClick={() => updateUserPreferences({ plan: 'premium' })}
-            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap cursor-pointer"
-          >
-            <Crown className="w-3.5 h-3.5" />
-            <span>{t.upgradeToPremium}</span>
-          </button>
-        )}
       </div>
     </div>
   );
@@ -2910,14 +2685,16 @@ export default function App() {
 
   return (
     <div className="flex h-[100dvh] w-full bg-black text-white overflow-hidden relative">
-      {wallpaperState.appliedAsBackground && wallpaperState.currentImageUrl && (
+      {wallpaperState.appliedAsBackground && wallpaperState.currentImageUrl ? (
         <img
           src={wallpaperState.currentImageUrl}
           alt=""
           aria-hidden="true"
           referrerPolicy="no-referrer"
-          className="fixed inset-0 w-full h-full object-cover opacity-20 pointer-events-none z-0"
+          className="fixed inset-0 w-full h-full object-cover opacity-25 pointer-events-none z-0"
         />
+      ) : (
+        <RotatingEarthWallpaper />
       )}
 
       {/* Desktop Sidebar */}
@@ -2938,12 +2715,12 @@ export default function App() {
       <div
         className={`flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden relative z-10 ${
           wallpaperState.appliedAsBackground && wallpaperState.currentImageUrl
-            ? 'bg-black/80'
-            : 'bg-black'
+            ? 'bg-black/75'
+            : 'bg-black/35'
         }`}
       >
-        {/* Top Bar: Left = Nova name + Glowing Logo | Right = Share + Voice + Premium */}
-        <header className="flex items-center justify-between gap-4 px-4 sm:px-6 py-3.5 border-b border-[#A855F7]/30 bg-black/95 backdrop-blur-sm shrink-0">
+        {/* Top Bar: Left = Nova name + Glowing Logo + Connection Dot | Right = Settings + Menu */}
+        <header className="flex items-center justify-between gap-4 px-4 sm:px-6 py-3.5 border-b border-[#A855F7]/30 bg-black/65 backdrop-blur-md shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <button
               type="button"
@@ -2974,39 +2751,40 @@ export default function App() {
               <span className="text-base font-semibold text-white whitespace-nowrap">
                 {t.appName}
               </span>
+              <span
+                title="Nova Online · Free Keyless AI"
+                aria-label="Nova Online"
+                className="w-2 h-2 rounded-full shrink-0 bg-emerald-500 shadow-[0_0_8px_rgba(34,197,94,0.85)]"
+              />
             </button>
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
             <button
               type="button"
-              onClick={() => setShareModalOpen(true)}
+              onClick={() => setActiveView((v) => (v === 'history' ? 'chat' : 'history'))}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-medium border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeView === 'history'
+                  ? 'bg-[#A855F7]/25 border-[#BF5AF2] text-white'
+                  : 'bg-[#0A0A0A] border-[#A855F7]/40 text-white hover:border-[#BF5AF2]'
+              }`}
+            >
+              <History className="w-3.5 h-3.5 text-[#BF5AF2]" />
+              <span>History</span>
+              {chats.length > 0 && (
+                <span className="px-1.5 py-0.5 rounded-md bg-[#A855F7]/25 text-[10px] font-mono tabular-nums text-white">
+                  {chats.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSettingsModalOpen(true)}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-medium bg-[#0A0A0A] border border-[#A855F7]/40 text-white hover:border-[#BF5AF2] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              <Share2 className="w-3.5 h-3.5 text-[#BF5AF2]" />
-              <span>Share Nova</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setVoiceModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <AudioLines className="w-3.5 h-3.5" />
-              <span>{t.voiceShort}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                profile.plan === 'premium'
-                  ? setActiveView('profile')
-                  : updateUserPreferences({ plan: 'premium' })
-              }
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Crown className="w-3.5 h-3.5" />
-              <span>{t.premiumShort}</span>
+              <Settings className="w-3.5 h-3.5 text-[#BF5AF2]" />
+              <span className="hidden sm:inline">{t.settings}</span>
             </button>
 
             <button
@@ -3040,35 +2818,32 @@ export default function App() {
           </div>
         )}
 
-        {/* Active View: Profile, Contacts, Wallpaper, Images Studio, Space, OR Chat */}
+        {/* Active View: Profile/Account, Ekere Wallpaper, Images Studio, Big History, OR Chat/Build */}
         {activeView === 'profile' ? (
           <UserProfileView
             isSignedIn={Boolean(authUser)}
             profile={profile}
-            dailyUsed={dailyUsed}
-            dailyImageUsed={dailyImageUsed}
             onBackToChat={() => setActiveView('chat')}
             onSignInGoogle={handleSignInGoogle}
             onSignOut={handleSignOut}
             onChangeLanguage={(lang) => updateUserPreferences({ language: lang })}
             onChangeVoice={(voice) => updateUserPreferences({ voiceName: voice })}
-            onChangePlan={(plan) => updateUserPreferences({ plan })}
             onClearHistory={handleClearAllHistory}
             t={t}
           />
-        ) : activeView === 'contacts' ? (
-          <ContactsView
-            contacts={activeContacts}
-            permissionGranted={contactsPermission}
-            onGrantPermission={handleGrantContactsPermission}
-            onAddContact={handleAddContact}
-            onDeleteContact={handleDeleteContact}
-            onAskCallInChat={(contact) => {
+        ) : activeView === 'history' ? (
+          <HistoryView
+            chats={chats}
+            images={allHistoryImages}
+            activeChatId={activeChatId}
+            onOpenChat={(chatId) => {
+              setActiveChatId(chatId);
               setActiveView('chat');
-              setMobileDrawerOpen(false);
-              void sendPrompt(`Call ${contact.name}`);
             }}
+            onDeleteChat={(chatId, e) => void handleDeleteChat(chatId, e)}
+            onNewChat={handleNewChat}
             onBackToChat={() => setActiveView('chat')}
+            onOpenImageStudio={() => setActiveView('images')}
           />
         ) : activeView === 'wallpaper' ? (
           <WallpaperView
@@ -3097,18 +2872,6 @@ export default function App() {
             }}
             onBackToChat={() => setActiveView('chat')}
           />
-        ) : activeView === 'space' ? (
-          <SpaceView
-            chats={chats}
-            images={allHistoryImages}
-            uploadedFiles={spaceUploadedFiles}
-            onOpenChat={(chatId) => {
-              setActiveChatId(chatId);
-              setActiveView('chat');
-            }}
-            onDeleteChat={handleDeleteChat}
-            onBackToChat={() => setActiveView('chat')}
-          />
         ) : (
           /* 3-Section Chat Layout: Header top (above) -> Tall Full-Width Scrollable Middle -> Fixed Compact Bottom Input */
           <>
@@ -3122,7 +2885,9 @@ export default function App() {
                         className="text-2xl sm:text-4xl font-semibold text-white tracking-tight max-w-xl"
                         style={{ textWrap: 'balance' }}
                       >
-                        {t.heroTitle}
+                        {memory.name
+                          ? `Hey ${memory.name}! What are we creating today?`
+                          : t.heroTitle}
                       </h1>
                       <p className="text-sm sm:text-base text-white/65 max-w-lg">
                         {t.heroSubtitle}
@@ -3162,6 +2927,11 @@ export default function App() {
                       t={t}
                       voiceName={profile.voiceName}
                       voiceSpeed={voiceSpeed}
+                      imageLoadingText={
+                        imageGenMode === 'real-photo'
+                          ? 'Generating real photo...'
+                          : 'Generating AI art...'
+                      }
                       isEditingBuiltApp={isBuildingApp}
                       onCreateVariations={memoizedCreateVariations}
                       onEditBuiltApp={memoizedEditBuiltApp}
@@ -3199,27 +2969,14 @@ export default function App() {
               )}
             </main>
 
-            <footer className="shrink-0 border-t border-[#A855F7]/25 bg-black/95 backdrop-blur-sm px-3 sm:px-6 pt-2 pb-2.5 z-20">
+            <footer className="shrink-0 border-t border-[#A855F7]/25 bg-black/65 backdrop-blur-md px-3 sm:px-6 pt-2 pb-2.5 z-20">
               {renderComposer()}
             </footer>
           </>
         )}
       </div>
 
-      {/* Live Voice Chat Modal */}
-      <VoiceChatModal
-        isOpen={voiceModalOpen}
-        onClose={() => setVoiceModalOpen(false)}
-        voiceName={profile.voiceName}
-        voiceSpeed={voiceSpeed}
-        onChangeVoice={(voice) => updateUserPreferences({ voiceName: voice })}
-        onChangeSpeed={handleChangeVoiceSpeed}
-        memorySummary={formatMemorySummary(memory)}
-        language={profile.language}
-        t={t}
-      />
-
-      {/* Quick Customize & Memory Modal */}
+      {/* Settings & Memory Modal */}
       <SettingsModal
         isOpen={settingsModalOpen}
         onClose={() => setSettingsModalOpen(false)}
@@ -3229,49 +2986,12 @@ export default function App() {
         onChangeLanguage={(lang) => updateUserPreferences({ language: lang })}
         onChangeVoice={(voice) => updateUserPreferences({ voiceName: voice })}
         onChangeVoiceSpeed={handleChangeVoiceSpeed}
-        onChangePlan={(plan) => updateUserPreferences({ plan })}
         onUpdateMemory={handleUpdateMemory}
         onClearMemory={handleClearMemory}
         t={t}
       />
 
-      {/* Chat-triggered Contacts Permission Popup */}
-      {callPermissionPrompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
-          <div className="w-full max-w-md rounded-2xl bg-[#0A0A0A] border border-[#BF5AF2]/60 p-6 shadow-[0_0_60px_-15px_rgba(191,90,242,0.7)] space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-[#A855F7]/20 border border-[#BF5AF2]/50 flex items-center justify-center shrink-0">
-                <Phone className="w-5 h-5 text-[#BF5AF2]" />
-              </div>
-              <h2 className="text-base font-semibold text-white">
-                Allow Nova to access contacts to make calls?
-              </h2>
-            </div>
-
-            <p className="text-xs text-white/75 leading-relaxed">
-              Nova only checks your saved contacts to display a Call Card with a Call button. Nova will never place a call automatically without your tap.
-            </p>
-
-            <div className="flex items-center justify-end gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setCallPermissionPrompt(null)}
-                className="px-4 py-2 rounded-2xl text-xs font-medium bg-black border border-white/20 text-white hover:border-[#BF5AF2] cursor-pointer"
-              >
-                Not Now
-              </button>
-              <button
-                type="button"
-                onClick={handleGrantContactsPermission}
-                className="px-4 py-2 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow cursor-pointer"
-              >
-                Allow Access
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* Right ChatGPT-Style Sidebar Menu */}
+      {/* Right Navigation Drawer */}
       <RightMenuDrawer
         isOpen={rightMenuOpen}
         onClose={() => setRightMenuOpen(false)}
@@ -3282,21 +3002,13 @@ export default function App() {
             void handleGenerateWallpaper(wallpaperState.style);
           }
         }}
-        onOpenCustomize={() => setSettingsModalOpen(true)}
+        onOpenSettings={() => setSettingsModalOpen(true)}
         chats={chats}
         images={allHistoryImages}
         onOpenChat={(chatId) => {
           setActiveChatId(chatId);
           setActiveView('chat');
         }}
-      />
-
-      {/* Share & Grow Nova Modal */}
-      <ShareNovaModal
-        isOpen={shareModalOpen}
-        onClose={() => setShareModalOpen(false)}
-        isPremium={profile.plan === 'premium'}
-        onUnlockFreePremium={() => void updateUserPreferences({ plan: 'premium' })}
       />
     </div>
   );

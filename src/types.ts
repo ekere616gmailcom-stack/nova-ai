@@ -45,7 +45,7 @@ export interface NovaMemory {
   updatedAtMs: number;
 }
 
-export type ActiveView = 'chat' | 'profile' | 'contacts' | 'wallpaper' | 'images' | 'space';
+export type ActiveView = 'chat' | 'profile' | 'wallpaper' | 'images' | 'history';
 
 export type WallpaperStyle =
   | 'Nature'
@@ -68,13 +68,6 @@ export const WALLPAPER_STYLES: WallpaperStyle[] = [
 
 export const WALLPAPER_TIMES: WallpaperTime[] = ['6AM', '7AM', '8AM'];
 
-export interface ContactItem {
-  id: string;
-  name: string;
-  phone: string;
-  createdAtMs: number;
-}
-
 export interface WallpaperState {
   autoEnabled: boolean;
   permissionGranted: boolean;
@@ -85,6 +78,7 @@ export interface WallpaperState {
   currentQuote: string;
   lastGeneratedDate: string;
   appliedAsBackground: boolean;
+  earthWallpaperEnabled?: boolean;
 }
 
 export interface UserProfile {

@@ -87,9 +87,9 @@ export const WallpaperView: React.FC<WallpaperViewProps> = ({
   };
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-4 sm:px-8 py-6 sm:py-10 bg-black">
+    <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-4 sm:px-8 py-6 sm:py-10 bg-black/45">
       <div className="max-w-[800px] mx-auto space-y-6">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
           <button
             type="button"
             onClick={onBackToChat}
@@ -99,20 +99,33 @@ export const WallpaperView: React.FC<WallpaperViewProps> = ({
             <span>Back to Chat</span>
           </button>
 
-          {state.permissionGranted && (
-            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#BF5AF2]">
-              <ShieldCheck className="w-4 h-4" />
-              <span>Wallpaper permission granted</span>
-            </span>
-          )}
+          <div className="flex items-center gap-3 flex-wrap">
+            {state.appliedAsBackground && (
+              <button
+                type="button"
+                onClick={() => onUpdateState({ appliedAsBackground: false })}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-[#0A0A0A] border border-[#A855F7]/40 hover:border-[#BF5AF2] text-white cursor-pointer"
+              >
+                <Wallpaper className="w-3.5 h-3.5 text-[#BF5AF2]" />
+                <span>Use Rotating Earth</span>
+              </button>
+            )}
+
+            {state.permissionGranted && (
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#BF5AF2]">
+                <ShieldCheck className="w-4 h-4" />
+                <span>Wallpaper permission granted</span>
+              </span>
+            )}
+          </div>
         </div>
 
         <div>
           <h1 className="text-2xl sm:text-3xl font-semibold text-white tracking-tight">
-            Daily AI Wallpaper
+            Ekere Wallpaper
           </h1>
           <p className="text-sm text-white/65 mt-1.5">
-            Wake up to a fresh Nova wallpaper every morning. Choose your daily schedule and aesthetic style.
+            Generate and refresh your Ekere wallpaper every morning. Choose your daily schedule and aesthetic style—or keep the live Rotating Earth active.
           </p>
         </div>
 
@@ -205,7 +218,7 @@ export const WallpaperView: React.FC<WallpaperViewProps> = ({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <div className="text-xs text-[#BF5AF2] font-medium">
-                Today’s Wallpaper · {state.style}
+                Ekere Wallpaper · {state.style}
               </div>
               <h2 className="text-lg font-semibold text-white mt-0.5">
                 {state.currentTitle || `${state.style} Edition`}
@@ -235,15 +248,31 @@ export const WallpaperView: React.FC<WallpaperViewProps> = ({
               ) : state.currentImageUrl ? (
                 <img
                   src={state.currentImageUrl}
-                  alt={state.currentTitle || 'Today Nova Wallpaper'}
+                  alt={state.currentTitle || 'Ekere Wallpaper'}
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    const imgEl = e.currentTarget;
+                    const step = imgEl.dataset.retryStep || '0';
+                    if (step === '0') {
+                      imgEl.dataset.retryStep = '1';
+                      imgEl.src = `https://image.pollinations.ai/prompt/${encodeURIComponent(
+                        'beautiful landscape, serene morning sky, vibrant natural colours'
+                      )}?width=720&height=1280&model=turbo&nologo=true&safe=true&seed=${Date.now()}`;
+                      return;
+                    }
+                    if (step === '1') {
+                      imgEl.dataset.retryStep = '2';
+                      imgEl.src = `https://picsum.photos/1024/1024?random=${Date.now()}`;
+                    }
+                  }}
+                  style={{ filter: 'none', mixBlendMode: 'normal', opacity: 1 }}
                   className="w-full h-full object-cover"
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center gap-2 p-5 text-center">
                   <Wallpaper className="w-6 h-6 text-[#A855F7]" />
                   <span className="text-xs text-white/70">
-                    Click Next Wallpaper to generate today’s real AI wallpaper.
+                    Click Next Wallpaper to generate your Ekere wallpaper.
                   </span>
                 </div>
               )}

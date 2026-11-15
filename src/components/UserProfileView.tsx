@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   ArrowLeft,
   Check,
-  Crown,
   Globe,
   LogIn,
   LogOut,
@@ -12,10 +11,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import {
-  FREE_DAILY_LIMIT,
-  FREE_IMAGE_LIMIT,
   LanguageCode,
-  PlanType,
   SUPPORTED_LANGUAGES,
   UserProfile,
   VOICE_OPTIONS,
@@ -26,14 +22,11 @@ import { TranslationStrings } from '../i18n/translations';
 interface UserProfileViewProps {
   isSignedIn: boolean;
   profile: UserProfile;
-  dailyUsed: number;
-  dailyImageUsed: number;
   onBackToChat: () => void;
   onSignInGoogle: () => void;
   onSignOut: () => void;
   onChangeLanguage: (lang: LanguageCode) => void;
   onChangeVoice: (voice: VoiceName) => void;
-  onChangePlan: (plan: PlanType) => void;
   onClearHistory: () => Promise<void>;
   t: TranslationStrings;
 }
@@ -41,24 +34,16 @@ interface UserProfileViewProps {
 export const UserProfileView: React.FC<UserProfileViewProps> = ({
   isSignedIn,
   profile,
-  dailyUsed,
-  dailyImageUsed,
   onBackToChat,
   onSignInGoogle,
   onSignOut,
   onChangeLanguage,
   onChangeVoice,
-  onChangePlan,
   onClearHistory,
   t,
 }) => {
   const [clearing, setClearing] = useState(false);
   const [clearedNotice, setClearedNotice] = useState(false);
-
-  const isPremium = profile.plan === 'premium';
-  const usagePercent = isPremium
-    ? 100
-    : Math.min(100, Math.round((dailyUsed / FREE_DAILY_LIMIT) * 100));
 
   const handleClear = async () => {
     setClearing(true);
@@ -109,12 +94,14 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
         {/* Page Title */}
         <div>
           <h1 className="text-2xl sm:text-3xl font-semibold text-white tracking-tight">
-            {t.profileHeading}
+            {t.settings}
           </h1>
-          <p className="text-sm text-white/65 mt-1.5">{t.profileSubheading}</p>
+          <p className="text-sm text-white/65 mt-1.5">
+            Manage your account, language, and voice preferences.
+          </p>
         </div>
 
-        {/* Account Identity & Plan Overview */}
+        {/* Account Identity */}
         <section className="rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/35 p-6 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5 pb-6 border-b border-[#A855F7]/20">
             <div className="flex items-center gap-4 min-w-0">
@@ -143,125 +130,20 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
                 </div>
               </div>
             </div>
-
-            <div className="flex items-center gap-2 text-sm shrink-0">
-              {isPremium ? (
-                <span className="inline-flex items-center gap-1.5 font-medium text-white">
-                  <Crown className="w-4 h-4 text-[#BF5AF2]" />
-                  <span>{t.premiumPlan}</span>
-                </span>
-              ) : (
-                <span className="text-white/80 font-medium">{t.freePlan}</span>
-              )}
-            </div>
           </div>
 
-          {/* Account Details & Daily Usage Meter */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             <div className="space-y-1">
               <div className="text-xs text-white/55">{t.nameLabel}</div>
               <div className="text-sm font-medium text-white">
                 {isSignedIn ? profile.displayName : t.guestUser}
               </div>
-              <div className="text-xs text-white/55 pt-2">{t.emailLabel}</div>
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-white/55">{t.emailLabel}</div>
               <div className="text-sm font-medium text-white/90">
                 {isSignedIn ? profile.email : '—'}
               </div>
-            </div>
-
-            <div className="space-y-2.5">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-white/60">{t.dailyUsageLabel}</span>
-                <span className="font-mono tabular-nums text-[#BF5AF2]">
-                  {isPremium
-                    ? t.unlimitedChats
-                    : `${dailyUsed} / ${FREE_DAILY_LIMIT} ${t.usedToday}`}
-                </span>
-              </div>
-              <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
-                <div
-                  className="h-full rounded-full transition-all duration-300 bg-gradient-to-r from-[#A855F7] to-[#BF5AF2]"
-                  style={{ width: `${usagePercent}%` }}
-                />
-              </div>
-              <div className="flex items-center justify-between text-xs text-white/60">
-                <span>
-                  {t.currentPlanLabel}:{' '}
-                  <span className="text-white font-medium">
-                    {isPremium ? t.premiumPlan : t.freePlan}
-                  </span>
-                </span>
-                <span className="font-mono tabular-nums text-white/80">
-                  {isPremium
-                    ? t.unlimitedChats
-                    : `${Math.max(0, FREE_IMAGE_LIMIT - dailyImageUsed)} / ${FREE_IMAGE_LIMIT} ${t.imagesLeftToday}`}
-                </span>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Subscription Plan Management */}
-        <section className="space-y-3">
-          <h3 className="font-display text-lg font-semibold text-white">{t.subscriptionTitle}</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* Free Plan Option */}
-            <div
-              className={`rounded-2xl p-5 border transition-colors flex flex-col justify-between gap-4 bg-[#0A0A0A] ${
-                !isPremium
-                  ? 'border-[#BF5AF2] nova-active-glow'
-                  : 'border-[#A855F7]/25'
-              }`}
-            >
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-display text-base font-semibold text-white">{t.freePlan}</span>
-                  {!isPremium && (
-                    <span className="text-xs font-medium text-[#BF5AF2]">{t.activeLabel}</span>
-                  )}
-                </div>
-                <p className="text-xs text-white/65 leading-relaxed">{t.freePlanDesc}</p>
-              </div>
-              {isPremium && (
-                <button
-                  type="button"
-                  onClick={() => onChangePlan('free')}
-                  className="w-full py-2.5 px-4 rounded-xl text-xs font-medium bg-black border border-[#A855F7]/35 hover:border-[#BF5AF2] text-white transition-colors cursor-pointer whitespace-nowrap"
-                >
-                  {t.switchToFree}
-                </button>
-              )}
-            </div>
-
-            {/* Premium Plan Option */}
-            <div
-              className={`rounded-2xl p-5 border transition-colors flex flex-col justify-between gap-4 bg-[#0A0A0A] ${
-                isPremium
-                  ? 'border-[#BF5AF2] nova-active-glow'
-                  : 'border-[#A855F7]/35'
-              }`}
-            >
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="inline-flex items-center gap-1.5 font-display text-base font-semibold text-white">
-                    <Crown className="w-4 h-4 text-[#BF5AF2]" />
-                    <span>{t.premiumPlan}</span>
-                  </span>
-                  {isPremium && (
-                    <span className="text-xs font-medium text-[#BF5AF2]">{t.activeLabel}</span>
-                  )}
-                </div>
-                <p className="text-xs text-white/75 leading-relaxed">{t.premiumPlanDesc}</p>
-              </div>
-              {!isPremium && (
-                <button
-                  type="button"
-                  onClick={() => onChangePlan('premium')}
-                  className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all cursor-pointer whitespace-nowrap"
-                >
-                  {t.activatePremium}
-                </button>
-              )}
             </div>
           </div>
         </section>

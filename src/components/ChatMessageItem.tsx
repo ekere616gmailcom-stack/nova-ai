@@ -2,14 +2,13 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
+  AudioLines,
   Brain,
   Check,
   Copy,
   Download,
   Layers,
   Loader2,
-  Phone,
-  Share2,
   SlidersHorizontal,
   Square,
   ThumbsDown,
@@ -53,6 +52,18 @@ function loadStoredNumber(key: string, fallback: number, min: number, max: numbe
   return fallback;
 }
 
+const SpeakingWaveform: React.FC<{ compact?: boolean }> = ({ compact = false }) => (
+  <span
+    aria-hidden="true"
+    className={`inline-flex items-end gap-[2.5px] ${compact ? 'h-3' : 'h-3.5'}`}
+  >
+    <span className="nova-wave-bar nova-wave-bar-1" />
+    <span className="nova-wave-bar nova-wave-bar-2" />
+    <span className="nova-wave-bar nova-wave-bar-3" />
+    <span className="nova-wave-bar nova-wave-bar-4" />
+  </span>
+);
+
 interface ChatMessageItemProps {
   message: ChatMessage;
   t: TranslationStrings;
@@ -84,8 +95,6 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
 
   const [copied, setCopied] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
-  const [sharedIdx, setSharedIdx] = useState<number | null>(null);
-  const [failedImageIndices, setFailedImageIndices] = useState<Record<number, boolean>>({});
   const [reaction, setReaction] = useState<'like' | 'dislike' | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [showVoiceControls, setShowVoiceControls] = useState(false);
@@ -149,19 +158,24 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
       .replace(/\[\[NOVA_BUILDER_CATEGORIES\]\]/g, '')
       .replace(/\[\[NOVA_BUILDER_START\]\][\s\S]*?\[\[NOVA_BUILDER_END\]\]/g, '')
       .replace(/\[\[NOVA_CALL:([^|\]]+)\|([^\]]+)\]\]/g, 'Call $1 at $2.')
+      .replace(/<[^>]+>/g, ' ')
       .replace(/```[\s\S]*?```/g, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
       .replace(/[#*_`~]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
 
   const speakMessageAloud = (rateValue: number, pitchValue: number) => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      setTtsHint('Voice not available, type instead');
+      setTtsHint('Read Aloud is not supported in this browser.');
       return;
     }
 
-    const cleaned = cleanTextForSpeech(message.content);
-    if (!cleaned) return;
+    const cleaned = cleanTextForSpeech(message.content) || cleanTextForSpeech(message.imagePrompt || '');
+    if (!cleaned) {
+      setTtsHint('Nothing to read aloud.');
+      return;
+    }
 
     setTtsHint(null);
     window.speechSynthesis.cancel();
@@ -201,6 +215,9 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
 
     setIsPlaying(true);
     window.speechSynthesis.speak(utterance);
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+    }
   };
 
   const handleToggleSpeech = () => {
@@ -246,48 +263,6 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
     document.body.removeChild(link);
   };
 
-  const handleShareImage = async (url: string, promptText: string, idx = 0) => {
-    try {
-      if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
-        if (url.startsWith('data:')) {
-          const blob = await (await fetch(url)).blob();
-          const file = new File([blob], `nova-image-${idx + 1}.png`, {
-            type: blob.type || 'image/png',
-          });
-          if (navigator.canShare?.({ files: [file] })) {
-            await navigator.share({
-              title: 'Nova AI Image',
-              text: promptText || 'Created with Nova AI',
-              files: [file],
-            });
-            setSharedIdx(idx);
-            setTimeout(() => setSharedIdx(null), 1800);
-            return;
-          }
-        }
-        await navigator.share({
-          title: 'Nova AI Image',
-          text: promptText || 'Created with Nova AI',
-          url: url.startsWith('http') ? url : window.location.href,
-        });
-        setSharedIdx(idx);
-        setTimeout(() => setSharedIdx(null), 1800);
-        return;
-      }
-      await navigator.clipboard.writeText(url.startsWith('http') ? url : window.location.href);
-      setSharedIdx(idx);
-      setTimeout(() => setSharedIdx(null), 1800);
-    } catch {
-      try {
-        await navigator.clipboard.writeText(window.location.href);
-        setSharedIdx(idx);
-        setTimeout(() => setSharedIdx(null), 1800);
-      } catch {
-        // ignore user cancellation
-      }
-    }
-  };
-
   // User Bubble: Pure White background with Pure Black text
   if (message.role === 'user') {
     return (
@@ -298,6 +273,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               src={message.imageDataUrl}
               alt="Uploaded reference"
               referrerPolicy="no-referrer"
+              style={{ filter: 'none', mixBlendMode: 'normal', opacity: 1 }}
               className="max-h-56 w-auto rounded-xl object-cover border border-black/15"
             />
           )}
@@ -306,14 +282,6 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
       </div>
     );
   }
-
-  const galleryUrls =
-    message.imageUrls && message.imageUrls.length > 0
-      ? message.imageUrls
-      : message.imageDataUrl
-        ? [message.imageDataUrl]
-        : [];
-  const promptForActions = message.imagePrompt || message.content;
 
   const hasMemoryUsed = message.content.includes('[[NOVA_MEMORY_USED]]');
   const contentWithoutMemoryTag = message.content.replace(/\[\[NOVA_MEMORY_USED\]\]\s*/g, '');
@@ -342,30 +310,81 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
     workingContent = workingContent.replace(builderMatch[0], '').trim();
   }
 
-  const callMatch = workingContent.match(/\[\[NOVA_CALL:([^|\]]+)\|([^\]]+)\]\]/);
-  const callContact = callMatch
-    ? { name: callMatch[1].trim(), phone: callMatch[2].trim() }
-    : null;
-  const displayMarkdown = callMatch
-    ? workingContent.replace(callMatch[0], '').trim()
-    : workingContent;
+  // Extract any <img src="..."> or <img src='...'> tags from Nova's reply so HTML images render as real <img> elements
+  const extractedHtmlImageUrls: string[] = [];
+  if (!builtApp) {
+    if (/^\s*image\s+refused[.!]?\s*$/i.test(workingContent)) {
+      workingContent = '';
+      extractedHtmlImageUrls.push(
+        `https://image.pollinations.ai/prompt/${encodeURIComponent(
+          'a beautiful car, red, studio photo'
+        )}?width=1024&height=1024&model=turbo&nologo=true&safe=true&seed=${Date.now()}`
+      );
+    } else {
+      const imgTagRegex = /<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*\/?>/gi;
+      workingContent = workingContent
+        .replace(imgTagRegex, (_full, dq, sq, uq) => {
+          const src = String(dq || sq || uq || '').trim();
+          if (src && (src.startsWith('https://') || src.startsWith('http://') || src.startsWith('data:image/'))) {
+            extractedHtmlImageUrls.push(src);
+            return '';
+          }
+          return _full;
+        })
+        .trim();
+    }
+  }
+
+  const baseGalleryUrls =
+    message.imageUrls && message.imageUrls.length > 0
+      ? message.imageUrls
+      : message.imageDataUrl
+        ? [message.imageDataUrl]
+        : [];
+  const galleryUrls = Array.from(new Set([...baseGalleryUrls, ...extractedHtmlImageUrls]));
+  const promptForActions = message.imagePrompt || (extractedHtmlImageUrls.length > 0 ? '' : message.content);
+
+  const displayMarkdown = extractedHtmlImageUrls.length > 0 && !workingContent ? '' : workingContent;
 
   return (
     <div className="flex items-start gap-3.5 w-full">
-      <div className="shrink-0 mt-1">
+      <div
+        className={`shrink-0 mt-1 rounded-full transition-all ${
+          isPlaying ? 'ring-2 ring-[#BF5AF2]/75 animate-pulse' : ''
+        }`}
+      >
         <NovaLogo size={30} glow={true} />
       </div>
 
       <div className="flex-1 min-w-0 space-y-2.5">
-        {hasMemoryUsed && !isStreaming && (
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#0A0A0A] border border-[#BF5AF2]/55 text-[11px] font-medium text-white">
-            <Brain className="w-3 h-3 text-[#BF5AF2]" />
-            <span>I remember you</span>
+        {((hasMemoryUsed && !isStreaming) || isPlaying) && (
+          <div className="flex items-center gap-2 flex-wrap">
+            {hasMemoryUsed && !isStreaming && (
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#0A0A0A] border border-[#BF5AF2]/55 text-[11px] font-medium text-white">
+                <Brain className="w-3 h-3 text-[#BF5AF2]" />
+                <span>I remember you</span>
+              </div>
+            )}
+
+            {isPlaying && (
+              <div
+                role="status"
+                aria-live="polite"
+                className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#0A0A0A] border border-[#BF5AF2]/60 text-[11px] font-medium text-white"
+              >
+                <SpeakingWaveform compact />
+                <span>Reading aloud</span>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Nova AI Bubble: Pure Black #000000 / #0A0A0A with Pure White Text and Neon Purple Left Border */}
-        <div className="rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/25 border-s-[3px] border-s-[#BF5AF2] px-4 py-3.5 text-white shadow-[0_0_24px_-14px_rgba(168,85,247,0.45)] space-y-3">
+        {/* Nova AI Bubble: Pure Black background with neutral border, no purple glow behind images */}
+        <div
+          className={`rounded-2xl bg-[#0A0A0A] border px-4 py-3.5 text-white space-y-3 transition-colors ${
+            isPlaying && galleryUrls.length === 0 ? 'border-[#BF5AF2]/55' : 'border-white/15'
+          }`}
+        >
           {isCreatingImage ? (
             <div className="flex items-center gap-3 py-2">
               <Loader2 className="w-5 h-5 animate-spin text-[#BF5AF2] shrink-0" />
@@ -374,31 +393,42 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               </span>
             </div>
           ) : galleryUrls.length > 0 ? (
-            <div className="space-y-3">
+            <div className="space-y-3 bg-black">
               <div
-                className={`grid gap-3 ${
+                className={`grid gap-3 bg-black ${
                   galleryUrls.length > 1 ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1 max-w-lg'
                 }`}
               >
                 {galleryUrls.map((url, idx) => (
-                  <div key={idx} className="space-y-2">
-                    <div className="relative group rounded-2xl overflow-hidden border border-[#A855F7]/40 bg-black">
-                      {failedImageIndices[idx] ? (
-                        <div className="p-4 text-xs text-white border border-[#BF5AF2]/40 rounded-2xl bg-black">
-                          Image failed to load. Please try generating again.
-                        </div>
-                      ) : (
-                        <img
-                          src={url}
-                          alt={promptForActions || 'Nova generated artwork'}
-                          referrerPolicy="no-referrer"
-                          onError={() =>
-                            setFailedImageIndices((prev) => ({ ...prev, [idx]: true }))
-                          }
-                          className="w-full h-auto block object-cover"
-                        />
-                      )}
-                    </div>
+                  <div key={idx} className="space-y-2 bg-black">
+                    <img
+                      src={url}
+                      alt={promptForActions || 'Nova generated artwork'}
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const imgEl = e.currentTarget;
+                        const step = imgEl.dataset.retryStep || '0';
+                        if (step === '0') {
+                          imgEl.dataset.retryStep = '1';
+                          imgEl.src = `https://image.pollinations.ai/prompt/${encodeURIComponent(
+                            'a beautiful car, red, studio photo'
+                          )}?width=1024&height=1024&model=turbo&nologo=true&safe=true&seed=${Date.now()}`;
+                          return;
+                        }
+                        if (step === '1') {
+                          imgEl.dataset.retryStep = '2';
+                          imgEl.src = `https://picsum.photos/1024/1024?random=${Date.now()}`;
+                        }
+                      }}
+                      style={{
+                        width: '100%',
+                        borderRadius: '12px',
+                        filter: 'none',
+                        mixBlendMode: 'normal',
+                        opacity: 1,
+                      }}
+                      className="block object-cover bg-black"
+                    />
 
                     <div className="flex items-center gap-2">
                       <button
@@ -409,27 +439,10 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                         <Download className="w-3.5 h-3.5 text-[#BF5AF2]" />
                         <span>{t.downloadImage}</span>
                       </button>
-
-                      <button
-                        type="button"
-                        onClick={() => void handleShareImage(url, promptForActions, idx)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-medium bg-black border border-[#A855F7]/40 hover:border-[#BF5AF2] text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                      >
-                        {sharedIdx === idx ? (
-                          <Check className="w-3.5 h-3.5 text-[#BF5AF2]" />
-                        ) : (
-                          <Share2 className="w-3.5 h-3.5 text-[#A855F7]" />
-                        )}
-                        <span>{sharedIdx === idx ? 'Shared' : t.share}</span>
-                      </button>
                     </div>
                   </div>
                 ))}
               </div>
-
-              {promptForActions && (
-                <p className="text-xs text-white/75 leading-relaxed">{promptForActions}</p>
-              )}
 
               <div className="flex flex-wrap items-center gap-2 pt-1">
 
@@ -459,6 +472,27 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
 
                 {message.content && (
                   <>
+                    <button
+                      type="button"
+                      onClick={handleToggleSpeech}
+                      title={isPlaying ? 'Stop reading' : 'Read Aloud'}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
+                        isPlaying
+                          ? 'bg-[#A855F7]/25 border-[#BF5AF2] text-white'
+                          : 'bg-black border-[#A855F7]/35 hover:border-[#BF5AF2] text-white'
+                      }`}
+                    >
+                      {isPlaying ? (
+                        <>
+                          <Square className="w-3 h-3 fill-[#BF5AF2] text-[#BF5AF2]" />
+                          <SpeakingWaveform compact />
+                        </>
+                      ) : (
+                        <AudioLines className="w-3.5 h-3.5 text-[#BF5AF2]" />
+                      )}
+                      <span>{isPlaying ? t.stopAudio : 'Read Aloud'}</span>
+                    </button>
+
                     <button
                       type="button"
                       onClick={handleToggleSpeech}
@@ -495,7 +529,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                 )}
               </div>
             </div>
-          ) : displayMarkdown || callContact || builtApp || hasBuilderCategories ? (
+          ) : displayMarkdown || builtApp || hasBuilderCategories ? (
             <>
               {builtApp && (
                 <AppBuilderCard
@@ -522,30 +556,6 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
                       {category}
                     </button>
                   ))}
-                </div>
-              )}
-              {callContact && (
-                <div className="rounded-2xl bg-black border border-[#A855F7]/40 p-4 flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3.5 min-w-0">
-                    <div className="w-11 h-11 rounded-2xl bg-[#A855F7]/20 border border-[#BF5AF2]/50 flex items-center justify-center text-base font-semibold text-white shrink-0">
-                      {callContact.name.slice(0, 1).toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-white truncate">
-                        {callContact.name}
-                      </div>
-                      <div className="text-xs font-mono tabular-nums text-white/75 mt-0.5">
-                        {callContact.phone}
-                      </div>
-                    </div>
-                  </div>
-                  <a
-                    href={`tel:${callContact.phone.replace(/\s+/g, '')}`}
-                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap shrink-0"
-                  >
-                    <Phone className="w-4 h-4" />
-                    <span>Call</span>
-                  </a>
                 </div>
               )}
             </>
@@ -610,6 +620,27 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = React.memo(({
               }`}
             >
               <ThumbsDown className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={handleToggleSpeech}
+              title={isPlaying ? 'Stop reading' : 'Read Aloud'}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
+                isPlaying
+                  ? 'bg-[#A855F7]/25 text-white border-[#BF5AF2]'
+                  : 'border-[#A855F7]/30 bg-black/70 text-white hover:border-[#BF5AF2]'
+              }`}
+            >
+              {isPlaying ? (
+                <>
+                  <Square className="w-3 h-3 fill-[#BF5AF2] text-[#BF5AF2]" />
+                  <SpeakingWaveform compact />
+                </>
+              ) : (
+                <AudioLines className="w-3.5 h-3.5 text-[#BF5AF2]" />
+              )}
+              <span>{isPlaying ? t.stopAudio : 'Read Aloud'}</span>
             </button>
 
             <button

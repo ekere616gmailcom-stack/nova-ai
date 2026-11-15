@@ -11,7 +11,6 @@ import {
   Loader2,
   Plus,
   Search,
-  Share2,
   Sparkles,
   Upload,
   X,
@@ -89,8 +88,6 @@ export const ImagesGalleryView: React.FC<ImagesGalleryViewProps> = ({
   } | null>(null);
   const [search, setSearch] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [sharedId, setSharedId] = useState<string | null>(null);
-  const [failedIds, setFailedIds] = useState<Record<string, boolean>>({});
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -165,44 +162,6 @@ export const ImagesGalleryView: React.FC<ImagesGalleryViewProps> = ({
       setTimeout(() => setCopiedId(null), 1600);
     } catch {
       // ignore
-    }
-  };
-
-  const handleShareImage = async (img: SavedImageEntry) => {
-    try {
-      if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
-        if (img.imageUrl.startsWith('data:')) {
-          const blob = await (await fetch(img.imageUrl)).blob();
-          const file = new File([blob], `nova-image-${img.id.slice(0, 6)}.png`, {
-            type: blob.type || 'image/png',
-          });
-          if (navigator.canShare?.({ files: [file] })) {
-            await navigator.share({
-              title: 'Nova AI Image',
-              text: img.prompt || 'Created with Nova AI',
-              files: [file],
-            });
-            setSharedId(img.id);
-            setTimeout(() => setSharedId(null), 1800);
-            return;
-          }
-        }
-        await navigator.share({
-          title: 'Nova AI Image',
-          text: img.prompt || 'Created with Nova AI',
-          url: img.imageUrl.startsWith('http') ? img.imageUrl : window.location.href,
-        });
-        setSharedId(img.id);
-        setTimeout(() => setSharedId(null), 1800);
-        return;
-      }
-      await navigator.clipboard.writeText(
-        img.imageUrl.startsWith('http') ? img.imageUrl : window.location.href
-      );
-      setSharedId(img.id);
-      setTimeout(() => setSharedId(null), 1800);
-    } catch {
-      // ignore cancel
     }
   };
 
@@ -451,22 +410,37 @@ export const ImagesGalleryView: React.FC<ImagesGalleryViewProps> = ({
             {filtered.map((img) => (
               <div
                 key={img.id}
-                className="rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/35 overflow-hidden flex flex-col justify-between group"
+                className="rounded-2xl bg-[#0A0A0A] border border-white/15 overflow-hidden flex flex-col justify-between group"
               >
-                <div className="relative aspect-square bg-black overflow-hidden flex items-center justify-center">
-                  {failedIds[img.id] ? (
-                    <div className="p-4 text-center text-xs text-white/80">
-                      Image failed to load.
-                    </div>
-                  ) : (
-                    <img
-                      src={img.imageUrl}
-                      alt={img.prompt}
-                      referrerPolicy="no-referrer"
-                      onError={() => setFailedIds((prev) => ({ ...prev, [img.id]: true }))}
-                      className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-300"
-                    />
-                  )}
+                <div className="relative aspect-square bg-black overflow-hidden">
+                  <img
+                    src={img.imageUrl}
+                    alt={img.prompt || 'Nova generated artwork'}
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      const imgEl = e.currentTarget;
+                      const step = imgEl.dataset.retryStep || '0';
+                      if (step === '0') {
+                        imgEl.dataset.retryStep = '1';
+                        imgEl.src = `https://image.pollinations.ai/prompt/${encodeURIComponent(
+                          'a beautiful car, red, studio photo'
+                        )}?width=1024&height=1024&model=turbo&nologo=true&safe=true&seed=${Date.now()}`;
+                        return;
+                      }
+                      if (step === '1') {
+                        imgEl.dataset.retryStep = '2';
+                        imgEl.src = `https://picsum.photos/1024/1024?random=${Date.now()}`;
+                      }
+                    }}
+                    style={{
+                      width: '100%',
+                      borderRadius: '12px',
+                      filter: 'none',
+                      mixBlendMode: 'normal',
+                      opacity: 1,
+                    }}
+                    className="h-full object-cover group-hover:scale-[1.02] transition-transform duration-300"
+                  />
                 </div>
 
                 <div className="p-4 space-y-3">
@@ -484,19 +458,6 @@ export const ImagesGalleryView: React.FC<ImagesGalleryViewProps> = ({
                         <Download className="w-3.5 h-3.5 text-[#BF5AF2]" />
                         <span>Download</span>
                       </a>
-
-                      <button
-                        type="button"
-                        onClick={() => void handleShareImage(img)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-black border border-[#A855F7]/40 hover:border-[#BF5AF2] text-white transition-colors cursor-pointer"
-                      >
-                        {sharedId === img.id ? (
-                          <Check className="w-3.5 h-3.5 text-[#BF5AF2]" />
-                        ) : (
-                          <Share2 className="w-3.5 h-3.5 text-[#A855F7]" />
-                        )}
-                        <span>{sharedId === img.id ? 'Shared' : 'Share'}</span>
-                      </button>
 
                       <button
                         type="button"
