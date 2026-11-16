@@ -81,16 +81,16 @@ export const AppBuilderCard: React.FC<AppBuilderCardProps> = ({
 
   return (
     <>
-      <div className="rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/40 overflow-hidden shadow-[0_0_32px_-12px_rgba(191,90,242,0.45)]">
+      <div className="rounded-lg bg-[#171717] border border-[#2a2a2a] overflow-hidden">
         {/* Builder Header Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 bg-black border-b border-[#A855F7]/25">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 bg-[#0f0f0f] border-b border-[#2a2a2a]">
           <div className="flex items-center gap-2 min-w-0">
-            <div className="w-7 h-7 rounded-xl bg-[#A855F7]/20 border border-[#BF5AF2]/45 flex items-center justify-center shrink-0">
-              <Globe className="w-3.5 h-3.5 text-[#BF5AF2]" />
+            <div className="w-7 h-7 rounded-lg bg-[#1c1c1c] border border-[#2a2a2a] flex items-center justify-center shrink-0">
+              <Globe className="w-3.5 h-3.5 text-neutral-300" />
             </div>
             <div className="min-w-0">
               <div className="text-xs font-semibold text-white truncate">{app.title}</div>
-              <div className="text-[10px] text-[#BF5AF2] uppercase tracking-wider">
+              <div className="text-[10px] text-neutral-400">
                 {app.appType === 'app' ? 'Interactive Mini App' : 'Live Website'}
               </div>
             </div>
@@ -100,10 +100,10 @@ export const AppBuilderCard: React.FC<AppBuilderCardProps> = ({
             <button
               type="button"
               onClick={() => setViewMode('preview')}
-              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-medium transition-colors cursor-pointer ${
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors cursor-pointer border ${
                 viewMode === 'preview'
-                  ? 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow'
-                  : 'bg-[#0A0A0A] border border-[#A855F7]/30 text-white/75 hover:text-white'
+                  ? 'bg-white border-white text-black'
+                  : 'bg-[#171717] border-[#2a2a2a] text-neutral-300 hover:text-white'
               }`}
             >
               <Eye className="w-3 h-3" />
@@ -113,10 +113,10 @@ export const AppBuilderCard: React.FC<AppBuilderCardProps> = ({
             <button
               type="button"
               onClick={() => setViewMode('code')}
-              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-medium transition-colors cursor-pointer ${
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors cursor-pointer border ${
                 viewMode === 'code'
-                  ? 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow'
-                  : 'bg-[#0A0A0A] border border-[#A855F7]/30 text-white/75 hover:text-white'
+                  ? 'bg-white border-white text-black'
+                  : 'bg-[#171717] border-[#2a2a2a] text-neutral-300 hover:text-white'
               }`}
             >
               <Code2 className="w-3 h-3" />
@@ -126,21 +126,21 @@ export const AppBuilderCard: React.FC<AppBuilderCardProps> = ({
             <button
               type="button"
               onClick={() => setFullScreenOpen(true)}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-medium bg-[#0A0A0A] border border-[#A855F7]/30 hover:border-[#BF5AF2] text-white transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-[#171717] border border-[#2a2a2a] hover:border-neutral-500 text-neutral-200 transition-colors cursor-pointer"
             >
-              <Maximize2 className="w-3 h-3 text-[#BF5AF2]" />
+              <Maximize2 className="w-3 h-3 text-neutral-300" />
               <span className="hidden sm:inline">Full Screen</span>
             </button>
 
             <button
               type="button"
               onClick={() => void handleCopyCode()}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-medium bg-[#0A0A0A] border border-[#A855F7]/30 hover:border-[#BF5AF2] text-white transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-[#171717] border border-[#2a2a2a] hover:border-neutral-500 text-neutral-200 transition-colors cursor-pointer"
             >
               {copied ? (
-                <Check className="w-3 h-3 text-[#BF5AF2]" />
+                <Check className="w-3 h-3 text-white" />
               ) : (
-                <Copy className="w-3 h-3 text-[#A855F7]" />
+                <Copy className="w-3 h-3 text-neutral-400" />
               )}
               <span>{copied ? 'Copied' : 'Copy Code'}</span>
             </button>
@@ -148,9 +148,9 @@ export const AppBuilderCard: React.FC<AppBuilderCardProps> = ({
             <button
               type="button"
               onClick={handleDownloadHtml}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-medium bg-[#0A0A0A] border border-[#A855F7]/30 hover:border-[#BF5AF2] text-white transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-[#171717] border border-[#2a2a2a] hover:border-neutral-500 text-neutral-200 transition-colors cursor-pointer"
             >
-              <Download className="w-3 h-3 text-[#BF5AF2]" />
+              <Download className="w-3 h-3 text-neutral-300" />
               <span>Download</span>
             </button>
 
@@ -158,13 +158,13 @@ export const AppBuilderCard: React.FC<AppBuilderCardProps> = ({
               <button
                 type="button"
                 onClick={() => setEditOpen((v) => !v)}
-                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-medium transition-colors cursor-pointer border ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors cursor-pointer border ${
                   editOpen
-                    ? 'bg-[#A855F7]/25 border-[#BF5AF2] text-white'
-                    : 'bg-[#0A0A0A] border-[#A855F7]/30 hover:border-[#BF5AF2] text-white'
+                    ? 'bg-[#262626] border-neutral-400 text-white'
+                    : 'bg-[#171717] border-[#2a2a2a] hover:border-neutral-500 text-neutral-200'
                 }`}
               >
-                <Pencil className="w-3 h-3 text-[#BF5AF2]" />
+                <Pencil className="w-3 h-3 text-neutral-300" />
                 <span>Edit</span>
               </button>
             )}
@@ -173,7 +173,7 @@ export const AppBuilderCard: React.FC<AppBuilderCardProps> = ({
 
         {/* Inline Edit Bar */}
         {editOpen && onEditApp && (
-          <div className="px-3.5 py-3 bg-[#0A0A0A] border-b border-[#A855F7]/25 space-y-2">
+          <div className="px-3.5 py-3 bg-[#141414] border-b border-[#2a2a2a] space-y-2">
             <div className="flex flex-wrap gap-1.5">
               {QUICK_EDITS.map((preset) => (
                 <button
@@ -181,7 +181,7 @@ export const AppBuilderCard: React.FC<AppBuilderCardProps> = ({
                   type="button"
                   disabled={isEditing}
                   onClick={() => handleSubmitEdit(preset)}
-                  className="px-2.5 py-1 rounded-xl text-[11px] font-medium bg-black hover:bg-[#A855F7]/25 border border-[#A855F7]/35 text-white transition-colors cursor-pointer disabled:opacity-50"
+                  className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-[#0f0f0f] hover:bg-[#262626] border border-[#2a2a2a] text-neutral-200 transition-colors cursor-pointer disabled:opacity-50"
                 >
                   {preset}
                 </button>
@@ -198,13 +198,13 @@ export const AppBuilderCard: React.FC<AppBuilderCardProps> = ({
                 type="text"
                 value={editText}
                 onChange={(e) => setEditText(e.target.value)}
-                placeholder='e.g. "Change colour to purple" or "Add my name and phone"'
-                className="flex-1 rounded-xl bg-black border border-[#A855F7]/35 px-3 py-1.5 text-xs text-white placeholder:text-white/45 focus:outline-none focus:border-[#BF5AF2]"
+                placeholder='e.g. "Change colour to slate" or "Add contact section"'
+                className="flex-1 rounded-lg bg-[#0f0f0f] border border-[#2a2a2a] px-3 py-1.5 text-xs text-white placeholder:text-neutral-500 focus:outline-none focus:border-neutral-400"
               />
               <button
                 type="submit"
                 disabled={!editText.trim() || isEditing}
-                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow cursor-pointer disabled:opacity-50"
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white hover:bg-neutral-200 text-black cursor-pointer disabled:opacity-50"
               >
                 {isEditing ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -228,8 +228,8 @@ export const AppBuilderCard: React.FC<AppBuilderCardProps> = ({
             />
           </div>
         ) : (
-          <div className="w-full max-h-[420px] overflow-auto bg-black p-4">
-            <pre className="text-[11px] leading-relaxed font-mono text-white whitespace-pre-wrap break-all">
+          <div className="w-full max-h-[420px] overflow-auto bg-[#0f0f0f] p-4">
+            <pre className="text-[11px] leading-relaxed font-mono text-neutral-200 whitespace-pre-wrap break-all">
               <code>{app.html}</code>
             </pre>
           </div>
@@ -238,25 +238,25 @@ export const AppBuilderCard: React.FC<AppBuilderCardProps> = ({
 
       {/* Full Screen Interactive Preview Overlay */}
       {fullScreenOpen && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-black">
-          <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[#A855F7]/30 bg-[#0A0A0A] shrink-0">
+        <div className="fixed inset-0 z-50 flex flex-col bg-[#0f0f0f]">
+          <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[#2a2a2a] bg-[#0f0f0f] shrink-0">
             <div className="flex items-center gap-2 min-w-0">
-              <Globe className="w-4 h-4 text-[#BF5AF2] shrink-0" />
+              <Globe className="w-4 h-4 text-neutral-300 shrink-0" />
               <span className="text-sm font-semibold text-white truncate">{app.title}</span>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => void handleCopyCode()}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-black border border-[#A855F7]/35 hover:border-[#BF5AF2] text-white cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#171717] border border-[#2a2a2a] hover:border-neutral-500 text-white cursor-pointer"
               >
-                {copied ? <Check className="w-3.5 h-3.5 text-[#BF5AF2]" /> : <Copy className="w-3.5 h-3.5 text-[#A855F7]" />}
+                {copied ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5 text-neutral-400" />}
                 <span>{copied ? 'Copied' : 'Copy Code'}</span>
               </button>
               <button
                 type="button"
                 onClick={handleDownloadHtml}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white hover:bg-neutral-200 text-black cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Download HTML</span>
@@ -265,7 +265,7 @@ export const AppBuilderCard: React.FC<AppBuilderCardProps> = ({
                 type="button"
                 onClick={() => setFullScreenOpen(false)}
                 aria-label="Close full screen"
-                className="p-2 rounded-xl bg-black border border-[#A855F7]/30 text-white/75 hover:text-white hover:border-[#BF5AF2] cursor-pointer"
+                className="p-2 rounded-lg bg-[#171717] border border-[#2a2a2a] text-neutral-300 hover:text-white hover:border-neutral-500 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>

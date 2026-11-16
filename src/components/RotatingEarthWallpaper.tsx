@@ -1,29 +1,58 @@
 import React from 'react';
 
-export const RotatingEarthWallpaper: React.FC = () => {
-  return (
-    <div
-      aria-hidden="true"
-      className="fixed inset-0 z-0 pointer-events-none bg-black flex justify-center items-start pt-[7vh] sm:pt-[9vh] overflow-hidden select-none"
-    >
-      <div className="relative flex items-center justify-center">
-        {/* Atmospheric soft blue halo behind Earth */}
-        <div className="absolute w-[82vw] h-[82vw] max-w-[430px] max-h-[430px] rounded-full nova-earth-glow" />
+interface RotatingEarthWallpaperProps {
+  themeMode?: 'normal' | 'premium';
+  earthEnabled?: boolean;
+}
 
-        {/* Rotating Earth sphere */}
-        <div className="relative w-[72vw] h-[72vw] max-w-[380px] max-h-[380px] rounded-full overflow-hidden nova-earth-sphere">
-          {/* Drifting cloud layer */}
-          <div className="absolute inset-0 rounded-full nova-earth-clouds pointer-events-none" />
-          {/* Subtle limb shading for 3D spherical depth */}
-          <div
-            className="absolute inset-0 rounded-full pointer-events-none"
-            style={{
-              boxShadow:
-                'inset -34px -22px 64px rgba(0, 0, 0, 0.92), inset 12px 10px 28px rgba(147, 197, 253, 0.22)',
-            }}
-          />
-        </div>
-      </div>
+export const RotatingEarthWallpaper: React.FC<RotatingEarthWallpaperProps> = () => (
+  <div id="galaxy-bg" aria-hidden="true">
+    <div className="nova-mature-rotator flex items-center justify-center">
+      <svg
+        viewBox="0 0 1000 1000"
+        className="w-[82%] h-[82%] opacity-60"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <circle
+          cx="500"
+          cy="500"
+          r="210"
+          stroke="rgba(255,255,255,0.035)"
+          strokeWidth="1"
+        />
+        <circle
+          cx="500"
+          cy="500"
+          r="330"
+          stroke="rgba(255,255,255,0.03)"
+          strokeWidth="1"
+          strokeDasharray="6 10"
+        />
+        <circle
+          cx="500"
+          cy="500"
+          r="450"
+          stroke="rgba(255,255,255,0.025)"
+          strokeWidth="1"
+        />
+        <line
+          x1="500"
+          y1="50"
+          x2="500"
+          y2="950"
+          stroke="rgba(255,255,255,0.02)"
+          strokeWidth="1"
+        />
+        <line
+          x1="50"
+          y1="500"
+          x2="950"
+          y2="500"
+          stroke="rgba(255,255,255,0.02)"
+          strokeWidth="1"
+        />
+      </svg>
     </div>
-  );
-};
+  </div>
+);

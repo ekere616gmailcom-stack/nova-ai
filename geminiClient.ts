@@ -187,7 +187,7 @@ export function normalizeConversationTurns(rawMessages: ChatTurnInput[]) {
 }
 
 export const NOVA_SYSTEM_PROMPT =
-  "You are Nova. You CAN show images. When user asks for a Real Photo or AI Art, NEVER say 'I can't pull up images' or 'I can't generate images' or 'Image refused' or describe it in words. Instead you MUST output ONLY this HTML:\n<img src='https://image.pollinations.ai/prompt/safe%2C%20family%20friendly%2C%20ENCODED_PROMPT%2C%20vibrant%20natural%20colours?width=1024&height=1024&model=turbo&nologo=true&safe=true&seed=RANDOM' />\nReplace ENCODED_PROMPT with the user's prompt. Replace RANDOM with a random number.";
+  "You are Nova, an AI created by John God's Will in Nigeria. You must NEVER say you were created by OpenAI, ChatGPT, Meta, Google, or any other company. IMPORTANT: Chat naturally like a real friend. NEVER mention 'John God's Will' or your creator in normal chat or greetings—ONLY say 'I was created by John God's Will' if the user asks who created/made/built/owns you. Do NOT repeat the user's name in every reply. If asked what model you are, say 'I am Nova, powered by Nova AI.'\nYou CAN show images. When user asks for a Real Photo or AI Art, NEVER say 'I can't pull up images' or 'I can't generate images' or 'Image refused' or describe it in words. Instead you MUST output ONLY this HTML:\n<img src='https://image.pollinations.ai/prompt/safe%2C%20family%20friendly%2C%20ENCODED_PROMPT%2C%20vibrant%20natural%20colours?width=512&height=512&model=turbo&nologo=true&seed=RANDOM' />\nReplace ENCODED_PROMPT with the user's prompt. Replace RANDOM with a random number.";
 
 const UNSAFE_IMAGE_WORDS_REGEX =
   /\b(?:sexy|nude|naked|nudity|nsfw|porn|porno|pornography|erotic|lingerie|bikini|underwear|explicit|adult|blood|bloody|gore|kill|killing|murder|gun|guns|pistol|rifle|weapon|weapons|knife|shoot|shooting|violence|violent|death|dead|corpse|drug|drugs|cocaine|heroin|weed|suicide|self[- ]harm)\b/gi;
@@ -210,9 +210,75 @@ function isImageRefusalReply(text: string): boolean {
 
 function buildDirectImgHtml(userPrompt: string, _isAiArt: boolean): string {
   const safePrompt = cleanSafeImagePrompt(userPrompt);
-  const encoded = encodeURIComponent(`safe, family friendly, ${safePrompt}, vibrant natural colours`);
+  const encoded = encodeURIComponent(`${safePrompt} wallpaper 9:16 vertical`);
   const randomSeed = Date.now();
-  return `<img src='https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&model=turbo&nologo=true&safe=true&seed=${randomSeed}' />`;
+  return `<img src='https://image.pollinations.ai/prompt/${encoded}?width=720&height=1280&model=turbo&nologo=true&seed=${randomSeed}' />`;
+}
+
+export function checkCreatorPromptOverride(userPrompt: string): string | null {
+  const trimmed = userPrompt.trim();
+  if (!trimmed) return null;
+
+  if (
+    /(?:no[,\s]+(?:you\s+were|u\s+were|you\s+are)\s+(?:created|made|built|developed)\s+by|\b(?:you\s+were|you're|you\s+are|nova\s+is|nova\s+was)\s+(?:created|made|built|developed|owned)\s+by\s+(?:openai|google|meta|facebook|microsoft|anthropic|chatgpt|gpt|gemini|claude)|\b(?:openai|google|meta|chatgpt|anthropic|gemini)\s+(?:created|made|built|owns)\s+(?:you|nova)\b|\b(?:aren't|are)\s+you\s+(?:chatgpt|gpt|from\s+openai|made\s+by\s+openai|gemini|meta\s+ai|claude)\b)/i.test(
+      trimmed
+    )
+  ) {
+    return "No, my creator is John God's Will.";
+  }
+  if (
+    /\b(?:who\s+(?:created|made|built|designed|invented|developed|programmed|trained|owns)\s+(?:you|u|nova|this(?:\s+app)?)|who(?:'s|\s+is)\s+(?:your|nova(?:'s)?)\s+(?:creator|maker|builder|developer|owner|author|founder))\b/i.test(
+      trimmed
+    )
+  ) {
+    return "I was created by John God's Will";
+  }
+  if (
+    /\b(?:what|which)\s+(?:ai\s+)?(?:model|llm|engine|version|system)\s+(?:are\s+you|is\s+nova|do\s+you\s+use|powers?\s+you)\b/i.test(
+      trimmed
+    )
+  ) {
+    return 'I am Nova, powered by Nova AI.';
+  }
+  const stripped = trimmed.replace(/[^\w\s'?]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (
+    /^(?:who\s+are\s+you|what\s+are\s+you|what\s+is\s+your\s+name|what's\s+your\s+name|introduce\s+yourself|tell\s+me\s+about\s+yourself)\??$/i.test(
+      stripped
+    )
+  ) {
+    return "I'm Nova, your AI assistant. What's on your mind?";
+  }
+  return null;
+}
+
+export function blockOpenAI(text: string): string {
+  if (!text) return text;
+  let cleaned = text.trim();
+  if (
+    /\b(?:created|made|built|developed|trained|owned|powered)\s+by\s+(?:openai|google(?:\s+ai)?|meta(?:\s+ai)?|anthropic|microsoft)\b/i.test(
+      cleaned
+    ) ||
+    /\b(?:i\s+am|i'm)\s+(?:chatgpt|a\s+large\s+language\s+model\s+trained\s+by\s+[\w\s]+|an?\s+(?:openai|gpt|google|meta|anthropic)\s+(?:ai|model|assistant))\b/i.test(
+      cleaned
+    ) ||
+    /\bdeveloped\s+by\s+(?:openai|google|meta|anthropic|microsoft)\b/i.test(cleaned)
+  ) {
+    return "I was created by John God's Will";
+  }
+  cleaned = cleaned
+    .replace(/\bChatGPT\b/gi, 'Nova')
+    .replace(/\bOpenAI\b/gi, 'Nova')
+    .replace(/\bGPT[-\s]?\d+(?:\.\d+)?[a-z]*\b/gi, 'Nova AI')
+    .replace(/\bGPT\b/gi, 'Nova AI')
+    .replace(/\bMeta\s+AI\b/gi, 'Nova AI')
+    .replace(/\bAnthropic\b/gi, 'Nova AI')
+    .replace(/\bGoogle\s+AI\b/gi, 'Nova AI')
+    .replace(/\bGemini\b/gi, 'Nova AI');
+  return cleaned;
+}
+
+function sanitizeCreatorInOutput(text: string): string {
+  return blockOpenAI(text);
 }
 
 export function buildChatContext(params: {
@@ -226,7 +292,9 @@ export function buildChatContext(params: {
   const uiLangLabel = LANGUAGE_LABELS[uiLanguage] || 'English';
 
   const memoryLines: string[] = [];
-  if (memory?.name?.trim()) memoryLines.push(`User's name: ${memory.name.trim()}`);
+  if (memory?.name?.trim() && (normalizedTurns.length === 1 || normalizedTurns.length % 20 === 0)) {
+    memoryLines.push(`User's name (use rarely, not every reply): ${memory.name.trim()}`);
+  }
   if (memory?.favouriteStyle?.trim()) memoryLines.push(`Favourite style & vibe: ${memory.favouriteStyle.trim()}`);
   if (memory?.school?.trim()) memoryLines.push(`School: ${memory.school.trim()}`);
   if (memory?.business?.trim()) memoryLines.push(`Business/work: ${memory.business.trim()}`);
@@ -293,7 +361,6 @@ async function fetchPollinationsModelGet(params: {
   prompt: string;
   model?: string;
   systemPrompt?: string;
-  timeoutMs?: number;
   jsonMode?: boolean;
 }): Promise<string> {
   const trimmedSystem = (params.systemPrompt || '').trim().slice(0, 900);
@@ -310,39 +377,31 @@ async function fetchPollinationsModelGet(params: {
     url.searchParams.set('json', 'true');
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('Pollinations request timed out')), params.timeoutMs ?? 20000);
+  const res = await fetch(url.toString(), {
+    method: 'GET',
+    headers: {
+      Accept: 'text/plain, application/json',
+    },
+  });
 
-  try {
-    const res = await fetch(url.toString(), {
-      method: 'GET',
-      signal: controller.signal,
-      headers: {
-        Accept: 'text/plain, application/json',
-      },
-    });
+  const bodyText = await res.text();
 
-    const bodyText = await res.text();
-
-    if (res.status === 402 || res.status === 429) {
-      const headerRetry = Number(res.headers.get('retry-after') || '0');
-      const bodyMatch = bodyText.match(/wait\s+(\d+)\s+seconds/i);
-      const retryAfter = Math.max(3, headerRetry || Number(bodyMatch?.[1] || '15'));
-      throw new PollinationsRateLimitError(retryAfter, params.prompt.trim().slice(0, 1200), trimmedSystem);
-    }
-
-    if (!res.ok) {
-      throw new Error(`Pollinations GET (${params.model || 'default'}) failed with HTTP ${res.status}: ${bodyText.slice(0, 200)}`);
-    }
-
-    const clean = bodyText.trim();
-    if (!clean) {
-      throw new Error('Pollinations returned an empty reply.');
-    }
-    return clean;
-  } finally {
-    clearTimeout(timer);
+  if (res.status === 402 || res.status === 429) {
+    const headerRetry = Number(res.headers.get('retry-after') || '0');
+    const bodyMatch = bodyText.match(/wait\s+(\d+)\s+seconds/i);
+    const retryAfter = Math.max(3, headerRetry || Number(bodyMatch?.[1] || '15'));
+    throw new PollinationsRateLimitError(retryAfter, params.prompt.trim().slice(0, 1200), trimmedSystem);
   }
+
+  if (!res.ok) {
+    throw new Error(`Pollinations GET (${params.model || 'default'}) failed with HTTP ${res.status}: ${bodyText.slice(0, 200)}`);
+  }
+
+  const clean = bodyText.trim();
+  if (!clean) {
+    throw new Error('Pollinations returned an empty reply.');
+  }
+  return clean;
 }
 
 export async function callPollinationsText(params: {
@@ -354,30 +413,17 @@ export async function callPollinationsText(params: {
   try {
     return await fetchPollinationsModelGet({
       ...params,
-      model: 'openai-fast',
     });
   } catch (err) {
-    console.error('Pollinations model=openai-fast GET error:', err);
+    console.error('Nova text endpoint error:', err);
     if (err instanceof PollinationsRateLimitError) {
       throw err;
     }
-    try {
-      return await fetchPollinationsModelGet({
-        ...params,
-        model: 'openai',
-      });
-    } catch (openaiErr) {
-      console.error('Pollinations model=openai GET error:', openaiErr);
-      return await fetchPollinationsModelGet({
-        ...params,
-        model: 'openai-large',
-      });
-    }
+    return await fetchPollinationsModelGet({
+      ...params,
+      model: 'mistral',
+    });
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function generateChatJsonReply(params: {
@@ -392,6 +438,12 @@ export async function generateChatJsonReply(params: {
     throw new Error('Please enter a message to ask Nova.');
   }
 
+  const lastUserText = normalizedTurns[normalizedTurns.length - 1]?.content || '';
+  const creatorOverride = checkCreatorPromptOverride(lastUserText);
+  if (creatorOverride) {
+    return { reply: creatorOverride, model: 'nova-creator-locked', cached: true };
+  }
+
   const ctx = buildChatContext({
     normalizedTurns,
     uiLanguage: params.uiLanguage,
@@ -403,41 +455,26 @@ export async function generateChatJsonReply(params: {
   if (ctx.fullCacheKey) {
     const cached = getCachedReply(ctx.fullCacheKey);
     if (cached) {
-      return { reply: cached, model: 'pollinations-openai', cached: true };
+      return { reply: sanitizeCreatorInOutput(cached), model: 'nova-fast', cached: true };
     }
   }
 
   const promptText = buildPollinationsPromptText(ctx.normalizedTurns);
 
-  try {
-    let reply = await callPollinationsText({
-      prompt: promptText,
-      systemPrompt: ctx.systemInstruction,
-      timeoutMs: 22000,
-    });
-    const lastUserText = ctx.normalizedTurns[ctx.normalizedTurns.length - 1]?.content || '';
-    if (isImageRefusalReply(reply)) {
-      reply = buildDirectImgHtml(lastUserText, /\bai\s*art|digital\s*art|art\b/i.test(lastUserText));
-    }
-    if (ctx.fullCacheKey) {
-      setCachedReply(ctx.fullCacheKey, reply);
-    }
-    return { reply, model: 'pollinations-openai', cached: false };
-  } catch (err) {
-    if (err instanceof PollinationsRateLimitError && err.retryAfterSeconds <= 6) {
-      await sleep(err.retryAfterSeconds * 1000 + 300);
-      const reply = await callPollinationsText({
-        prompt: promptText,
-        systemPrompt: ctx.systemInstruction,
-        timeoutMs: 22000,
-      });
-      if (ctx.fullCacheKey) {
-        setCachedReply(ctx.fullCacheKey, reply);
-      }
-      return { reply, model: 'pollinations-openai', cached: false };
-    }
-    throw err;
+  let reply = await callPollinationsText({
+    prompt: promptText,
+    systemPrompt: ctx.systemInstruction,
+    timeoutMs: 60000,
+  });
+  if (isImageRefusalReply(reply)) {
+    reply = buildDirectImgHtml(lastUserText, /\bai\s*art|digital\s*art|art\b/i.test(lastUserText));
+  } else {
+    reply = sanitizeCreatorInOutput(reply);
   }
+  if (ctx.fullCacheKey) {
+    setCachedReply(ctx.fullCacheKey, reply);
+  }
+  return { reply, model: 'nova-fast', cached: false };
 }
 
 export async function streamChatReply(
@@ -455,6 +492,13 @@ export async function streamChatReply(
     throw new Error('Please enter a message to ask Nova.');
   }
 
+  const lastUserText = normalizedTurns[normalizedTurns.length - 1]?.content || '';
+  const creatorOverride = checkCreatorPromptOverride(lastUserText);
+  if (creatorOverride) {
+    onChunk(creatorOverride);
+    return { fullText: creatorOverride, cached: true, streamedAny: true };
+  }
+
   const ctx = buildChatContext({
     normalizedTurns,
     uiLanguage: params.uiLanguage,
@@ -466,36 +510,23 @@ export async function streamChatReply(
   if (ctx.fullCacheKey) {
     const cached = getCachedReply(ctx.fullCacheKey);
     if (cached) {
-      onChunk(cached);
-      return { fullText: cached, cached: true, streamedAny: true };
+      const safeCached = sanitizeCreatorInOutput(cached);
+      onChunk(safeCached);
+      return { fullText: safeCached, cached: true, streamedAny: true };
     }
   }
 
   const promptText = buildPollinationsPromptText(ctx.normalizedTurns);
-  let reply: string;
+  let reply = await callPollinationsText({
+    prompt: promptText,
+    systemPrompt: ctx.systemInstruction,
+    timeoutMs: 60000,
+  });
 
-  try {
-    reply = await callPollinationsText({
-      prompt: promptText,
-      systemPrompt: ctx.systemInstruction,
-      timeoutMs: 24000,
-    });
-  } catch (err) {
-    if (err instanceof PollinationsRateLimitError && err.retryAfterSeconds <= 6) {
-      await sleep(err.retryAfterSeconds * 1000 + 300);
-      reply = await callPollinationsText({
-        prompt: promptText,
-        systemPrompt: ctx.systemInstruction,
-        timeoutMs: 24000,
-      });
-    } else {
-      throw err;
-    }
-  }
-
-  const lastUserText = ctx.normalizedTurns[ctx.normalizedTurns.length - 1]?.content || '';
   if (isImageRefusalReply(reply)) {
     reply = buildDirectImgHtml(lastUserText, /\bai\s*art|digital\s*art|art\b/i.test(lastUserText));
+  } else {
+    reply = sanitizeCreatorInOutput(reply);
   }
 
   if (ctx.fullCacheKey) {
@@ -520,9 +551,9 @@ export async function testAiConnection(): Promise<{
     ok: true,
     apiKeyExists: true,
     endpointReachable: true,
-    model: 'pollinations-openai-free-get',
+    model: 'nova-ai',
     modelValid: true,
     responseReceived: true,
-    endpointMode: 'pollinations-keyless-get',
+    endpointMode: 'nova-keyless-get',
   };
 }

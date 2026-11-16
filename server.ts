@@ -8,7 +8,6 @@ import {
   handleChat,
   handleGeminiTest,
   handleHealth,
-  handleImage,
   handleTranscribe,
   handleTts,
   handleWallpaper,
@@ -28,7 +27,6 @@ async function startServer() {
   app.get(['/api/gemini/test', '/api/test-gemini'], (req, res) => void handleGeminiTest(req, res));
   app.get('/api/chat', (req, res) => void handleChat(req, res));
   app.post('/api/chat', (req, res) => void handleChat(req, res));
-  app.post('/api/image', (req, res) => void handleImage(req, res));
   app.post('/api/wallpaper', (req, res) => void handleWallpaper(req, res));
   app.post('/api/build-app', (req, res) => void handleBuildApp(req, res));
   app.post('/api/transcribe', (req, res) => void handleTranscribe(req, res));

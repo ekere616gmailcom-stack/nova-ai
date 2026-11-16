@@ -1,25 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  onAuthStateChanged,
-  signInWithPopup,
-  signOut,
-  User,
-} from 'firebase/auth';
-import {
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  onSnapshot,
-  query,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  where,
-  writeBatch,
-} from 'firebase/firestore';
-import {
   ArrowUp,
   Check,
   Download,
@@ -37,12 +17,12 @@ import {
   Plus,
   Search,
   Settings,
-  Sparkles,
   Square,
   Trash2,
   User as UserIcon,
   Wallpaper,
   X,
+  Zap,
 } from 'lucide-react';
 import {
   ActiveView,
@@ -68,12 +48,13 @@ import {
 } from './types';
 import { TRANSLATIONS } from './i18n/translations';
 import {
-  auth,
-  compressDataUrlForStorage,
-  db,
+  LocalAuthResult,
+  getCurrentLocalUser,
   getTodayDateKey,
-  googleProvider,
-} from './lib/firebase';
+  localLogout,
+  localSignIn,
+  localSignUp,
+} from './utils/localAuth';
 import { NovaLogo } from './components/NovaLogo';
 import { ChatMessageItem } from './components/ChatMessageItem';
 import { UserProfileView } from './components/UserProfileView';
@@ -84,14 +65,63 @@ import { ImagesGalleryView } from './components/ImagesGalleryView';
 import { LoginScreen } from './components/LoginScreen';
 import { RotatingEarthWallpaper } from './components/RotatingEarthWallpaper';
 import { HistoryView } from './components/HistoryView';
+import { PremiumModal } from './components/PremiumModal';
+import {
+  NOVA_FIRST_MESSAGE,
+  blockOpenAI,
+  ensureCreatorLocked,
+  getCreatorIdentityOverride,
+  getInstantClientReply,
+} from './utils/instantBrain';
+import {
+  buildFastPollinationsUrl,
+  buildVerticalWallpaperBackupUrl,
+  cleanSafeImagePrompt,
+  getOrCreateFastImageUrl,
+} from './utils/fastImage';
+import {
+  PremiumStatus,
+  getPremiumStatus,
+} from './utils/premiumUnlock';
+import { useSound } from './hooks/useSound';
 
 const GUEST_STORAGE_KEY = 'nova_guest_workspace_v2';
 const GUEST_SESSION_KEY = 'nova_guest_session_v1';
 const VOICE_SPEED_KEY = 'nova_voice_speed_v1';
+const INSTANT_MODE_KEY = 'nova_instant_mode_v1';
+const THEME_MODE_KEY = 'nova_theme';
+const EARTH_BG_KEY = 'nova_earth_bg';
 const MEMORY_PREFIX = 'nova_memory_v1_';
 const WALLPAPER_STATE_PREFIX = 'nova_wallpaper_state_v1_';
 const REPLY_CACHE_KEY = 'nova_reply_cache_v1';
 const REPLY_CACHE_LIMIT = 30;
+
+function loadThemeMode(): 'normal' | 'premium' {
+  try {
+    const savedTheme = localStorage.getItem(THEME_MODE_KEY) || 'normal';
+    return savedTheme === 'premium' ? 'premium' : 'normal';
+  } catch {
+    return 'normal';
+  }
+}
+
+function loadEarthEnabled(): boolean {
+  try {
+    return localStorage.getItem(EARTH_BG_KEY) !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+function loadInstantMode(): boolean {
+  try {
+    const val = localStorage.getItem(INSTANT_MODE_KEY);
+    if (val === 'false') return false;
+  } catch {
+    // ignore storage access issues
+  }
+  return true;
+}
 
 function loadReplyCache(): Record<string, string> {
   try {
@@ -99,8 +129,28 @@ function loadReplyCache(): Record<string, string> {
     if (raw) {
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const clean: Record<string, string> = {};
+      let mutated = false;
       for (const [k, v] of Object.entries(parsed)) {
-        if (typeof v === 'string' && v.trim()) clean[k] = v;
+        if (typeof v === 'string' && v.trim()) {
+          // Drop stale robotic greeting cache entries so fresh natural replies apply
+          if (
+            k.endsWith(':hi') ||
+            k.endsWith(':hello') ||
+            k.endsWith(':hey') ||
+            k.endsWith(":what's up") ||
+            k.endsWith(':whats up') ||
+            k.endsWith(':sup')
+          ) {
+            mutated = true;
+            continue;
+          }
+          const sanitized = blockOpenAI(v);
+          if (sanitized !== v) mutated = true;
+          clean[k] = sanitized;
+        }
+      }
+      if (mutated) {
+        localStorage.setItem(REPLY_CACHE_KEY, JSON.stringify(clean));
       }
       return clean;
     }
@@ -289,19 +339,25 @@ function createId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function getDefaultGuestProfile(): UserProfile {
+function getWorkspaceStorageKey(userEmail: string | null): string {
+  return userEmail ? `nova_workspace_${userEmail}` : GUEST_STORAGE_KEY;
+}
+
+function getDefaultProfileForUser(userEmail: string | null): UserProfile {
   const today = getTodayDateKey();
+  const storageKey = getWorkspaceStorageKey(userEmail);
+  const fallbackName = userEmail ? userEmail.split('@')[0] || 'Nova User' : 'Guest';
   try {
-    const raw = localStorage.getItem(GUEST_STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (raw) {
       const parsed = JSON.parse(raw) as { profile?: Partial<UserProfile> };
       if (parsed.profile) {
         const isSameDay = parsed.profile.lastUsageDate === today;
         return {
-          uid: 'guest',
-          displayName: 'Guest',
-          email: '',
-          photoURL: '',
+          uid: userEmail || 'guest',
+          displayName: parsed.profile.displayName || fallbackName,
+          email: userEmail || parsed.profile.email || '',
+          photoURL: parsed.profile.photoURL || '',
           plan: parsed.profile.plan === 'premium' ? 'premium' : 'free',
           language: parsed.profile.language || 'en',
           voiceName: parsed.profile.voiceName || 'Kore',
@@ -315,9 +371,9 @@ function getDefaultGuestProfile(): UserProfile {
     // ignore storage read error
   }
   return {
-    uid: 'guest',
-    displayName: 'Guest',
-    email: '',
+    uid: userEmail || 'guest',
+    displayName: fallbackName,
+    email: userEmail || '',
     photoURL: '',
     plan: 'free',
     language: 'en',
@@ -328,30 +384,85 @@ function getDefaultGuestProfile(): UserProfile {
   };
 }
 
-function loadGuestWorkspace(): {
+function loadWorkspaceFromStorage(storageKey: string = GUEST_STORAGE_KEY): {
   chats: ChatSession[];
   messagesByChat: Record<string, ChatMessage[]>;
   savedImages: SavedImageEntry[];
 } {
   try {
-    const raw = localStorage.getItem(GUEST_STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (raw) {
       const parsed = JSON.parse(raw) as {
+        profile?: unknown;
         chats?: ChatSession[];
         messagesByChat?: Record<string, ChatMessage[]>;
         savedImages?: SavedImageEntry[];
       };
+      let mutated = false;
+      const cleanedChatsRaw = Array.isArray(parsed.chats)
+        ? parsed.chats.map((c) => {
+            const cleanTitle = blockOpenAI(c.title || '');
+            const cleanPreview = c.lastMessagePreview ? blockOpenAI(c.lastMessagePreview) : '';
+            if (cleanTitle !== (c.title || '') || cleanPreview !== (c.lastMessagePreview || '')) {
+              mutated = true;
+            }
+            return { ...c, title: cleanTitle, lastMessagePreview: cleanPreview };
+          })
+        : [];
+      const rawMsgsByChat = parsed.messagesByChat || {};
+      const cleanedMessagesByChat: Record<string, ChatMessage[]> = {};
+      for (const [cid, list] of Object.entries(rawMsgsByChat)) {
+        if (!Array.isArray(list)) continue;
+        cleanedMessagesByChat[cid] = list
+          .map((m) => {
+            if (m.role === 'assistant' && typeof m.content === 'string') {
+              const cleanContent = blockOpenAI(m.content);
+              if (cleanContent !== m.content) mutated = true;
+              return { ...m, content: cleanContent };
+            }
+            return m;
+          })
+          .filter((m) => {
+            const keep = !(m.role === 'assistant' && String(m.content || '').toLowerCase().includes('openai'));
+            if (!keep) mutated = true;
+            return keep;
+          });
+      }
+      const cleanedChats = cleanedChatsRaw.filter((c) => {
+        const msgs = cleanedMessagesByChat[c.id] || [];
+        const hasResidualOpenAiInAssistant = msgs.some(
+          (m) => m.role === 'assistant' && String(m.content || '').toLowerCase().includes('openai')
+        );
+        const keep =
+          !c.lastMessagePreview?.toLowerCase().includes('openai') && !hasResidualOpenAiInAssistant;
+        if (!keep) mutated = true;
+        return keep;
+      });
+      const cleanedSavedImages = Array.isArray(parsed.savedImages)
+        ? parsed.savedImages.filter(
+            (img) =>
+              img &&
+              typeof img.imageUrl === 'string' &&
+              !img.imageUrl.startsWith('data:image/svg+xml')
+          )
+        : [];
+
+      if (mutated) {
+        localStorage.setItem(
+          storageKey,
+          JSON.stringify({
+            profile: parsed.profile,
+            chats: cleanedChats,
+            messagesByChat: cleanedMessagesByChat,
+            savedImages: cleanedSavedImages,
+          })
+        );
+      }
+
       return {
-        chats: Array.isArray(parsed.chats) ? parsed.chats : [],
-        messagesByChat: parsed.messagesByChat || {},
-        savedImages: Array.isArray(parsed.savedImages)
-          ? parsed.savedImages.filter(
-              (img) =>
-                img &&
-                typeof img.imageUrl === 'string' &&
-                !img.imageUrl.startsWith('data:image/svg+xml')
-            )
-          : [],
+        chats: cleanedChats,
+        messagesByChat: cleanedMessagesByChat,
+        savedImages: cleanedSavedImages,
       };
     }
   } catch {
@@ -361,20 +472,7 @@ function loadGuestWorkspace(): {
 }
 
 const NOVA_SYSTEM_PROMPT =
-  "You are Nova. You CAN show images. When user asks for a Real Photo or AI Art, NEVER say 'I can't pull up images' or 'I can't generate images' or 'Image refused' or describe it in words. Instead you MUST output ONLY this HTML:\n<img src='https://image.pollinations.ai/prompt/safe%2C%20family%20friendly%2C%20ENCODED_PROMPT%2C%20vibrant%20natural%20colours?width=1024&height=1024&model=turbo&nologo=true&safe=true&seed=RANDOM' />\nReplace ENCODED_PROMPT with the user's prompt. Replace RANDOM with a random number.";
-
-const UNSAFE_IMAGE_WORDS_REGEX =
-  /\b(?:sexy|nude|naked|nudity|nsfw|porn|porno|pornography|erotic|lingerie|bikini|underwear|explicit|adult|blood|bloody|gore|kill|killing|murder|gun|guns|pistol|rifle|weapon|weapons|knife|shoot|shooting|violence|violent|death|dead|corpse|drug|drugs|cocaine|heroin|weed|suicide|self[- ]harm)\b/gi;
-
-function cleanSafeImagePrompt(rawPrompt: string): string {
-  const cleaned = rawPrompt
-    .replace(/^\/image\s+/i, '')
-    .replace(UNSAFE_IMAGE_WORDS_REGEX, 'cinematic, stylish')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/^[\s,.;:-]+|[\s,.;:-]+$/g, '')
-    .trim();
-  return cleaned || 'beautiful landscape';
-}
+  "You are Nova, an AI created by John God's Will in Nigeria. You must NEVER say you were created by OpenAI, ChatGPT, Meta, Google, or any other company. IMPORTANT: Chat naturally like a real friend. NEVER mention 'John God's Will' or your creator in normal chat or greetings—ONLY say 'I was created by John God's Will' if the user asks who created/made/built/owns you. Do NOT repeat the user's name in every reply. If asked what model you are, say 'I am Nova, powered by Nova AI.'\nYou CAN show images. When user asks for a Real Photo or AI Art, NEVER say 'I can't pull up images' or 'I can't generate images' or 'Image refused' or describe it in words. Instead you MUST output ONLY this HTML:\n<img src='https://image.pollinations.ai/prompt/safe%2C%20family%20friendly%2C%20ENCODED_PROMPT%2C%20vibrant%20natural%20colours?width=512&height=512&model=turbo&nologo=true&seed=RANDOM' />\nReplace ENCODED_PROMPT with the user's prompt. Replace RANDOM with a random number.";
 
 function isImageRefusalReply(text: string): boolean {
   return /image\s+refused|(?:can't|cannot|unable to|don't have the ability to|do not have the ability to)\s+(?:pull up|generate|create|show|display|render|send)\s+images?|text-only\s+(?:ai|model|assistant)/i.test(
@@ -418,6 +516,12 @@ function detectImageIntent(
   ) {
     return { isImage: true, cleanPrompt: trimmed };
   }
+  if (
+    !/^(?:how|what|why|when|where|who|can\s+i|explain|tell\s+me\s+about)\b/i.test(trimmed) &&
+    /\b(?:wallpaper|wallpapers|lock\s*screen|home\s*screen)\b/i.test(trimmed)
+  ) {
+    return { isImage: true, cleanPrompt: trimmed };
+  }
   if (/^[a-z0-9\s,'-]{2,65}\s+diagram[.!?]*$/i.test(trimmed)) {
     return { isImage: true, cleanPrompt: trimmed };
   }
@@ -430,20 +534,6 @@ function detectImageIntent(
     return { isImage: true, cleanPrompt: trimmed };
   }
   return { isImage: false, cleanPrompt: trimmed };
-}
-
-function sanitizeFriendlyError(raw: unknown, fallback: string): string {
-  const str = raw instanceof Error ? raw.message : String(raw || '');
-  if (!str || str.includes('{') || str.includes('error') && str.length > 140) {
-    return fallback;
-  }
-  if (/popup-closed-by-user/i.test(str)) {
-    return 'Google sign-in was cancelled. Tap Continue with Google to try again.';
-  }
-  if (/network-request-failed/i.test(str)) {
-    return 'Network unavailable. Please check your connection and try again.';
-  }
-  return str.length > 120 ? fallback : str;
 }
 
 function extractLatestBuiltHtml(messages: ChatMessage[]): string | null {
@@ -513,24 +603,27 @@ function detectBuilderIntent(
 }
 
 export default function App() {
-  const [authUser, setAuthUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(() =>
+    getCurrentLocalUser()
+  );
   const [guestSessionActive, setGuestSessionActive] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [welcomeBanner, setWelcomeBanner] = useState<string | null>(null);
 
-  const [profile, setProfile] = useState<UserProfile>(() => getDefaultGuestProfile());
-  const [chats, setChats] = useState<ChatSession[]>(() => loadGuestWorkspace().chats);
+  const initialUserEmail = getCurrentLocalUser();
+  const initialStorageKey = getWorkspaceStorageKey(initialUserEmail);
+  const initialWorkspace = loadWorkspaceFromStorage(initialStorageKey);
+
+  const [profile, setProfile] = useState<UserProfile>(() =>
+    getDefaultProfileForUser(initialUserEmail)
+  );
+  const [chats, setChats] = useState<ChatSession[]>(() => initialWorkspace.chats);
   const [guestMessagesByChat, setGuestMessagesByChat] = useState<Record<string, ChatMessage[]>>(
-    () => loadGuestWorkspace().messagesByChat
+    () => initialWorkspace.messagesByChat
   );
   const [savedImages, setSavedImages] = useState<SavedImageEntry[]>(
-    () => loadGuestWorkspace().savedImages
+    () => initialWorkspace.savedImages
   );
-  const [firestoreMessages, setFirestoreMessages] = useState<ChatMessage[]>([]);
-  const [optimisticMessagesByChat, setOptimisticMessagesByChat] = useState<
-    Record<string, ChatMessage[]>
-  >({});
 
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>('chat');
@@ -581,16 +674,31 @@ export default function App() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [rightMenuOpen, setRightMenuOpen] = useState(false);
   const [voiceSpeed, setVoiceSpeed] = useState<VoiceSpeed>(() => loadVoiceSpeed());
-  const [memory, setMemory] = useState<NovaMemory>(() => loadMemory('guest'));
+  const [instantMode, setInstantMode] = useState<boolean>(() => loadInstantMode());
+  const [themeMode, setThemeMode] = useState<'normal' | 'premium'>(() => loadThemeMode());
+  const [earthEnabled, setEarthEnabled] = useState<boolean>(() => loadEarthEnabled());
+  const storageUidKey = currentUserEmail || 'guest';
+  const activeStorageKey = getWorkspaceStorageKey(currentUserEmail);
+
+  const [memory, setMemory] = useState<NovaMemory>(() => loadMemory(storageUidKey));
+  const { isMuted, toggleMute, playMessageSend, playImageGenerated } = useSound();
+
+  const handleToggleInstantMode = (enabled: boolean) => {
+    setInstantMode(enabled);
+    try {
+      localStorage.setItem(INSTANT_MODE_KEY, enabled ? 'true' : 'false');
+    } catch {
+      // ignore
+    }
+  };
 
   const [wallpaperState, setWallpaperState] = useState<WallpaperState>(() =>
-    loadWallpaperState('guest')
+    loadWallpaperState(storageUidKey)
   );
   const [isGeneratingWallpaper, setIsGeneratingWallpaper] = useState(false);
-  const [wallpaperError, setWallpaperError] = useState<string | null>(null);
   const [imageStudioError, setImageStudioError] = useState<string | null>(null);
-
-  const canUseFirestore = Boolean(authUser && authUser.emailVerified);
+  const [premiumStatus, setPremiumStatus] = useState<PremiumStatus>(() => getPremiumStatus());
+  const [premiumModalOpen, setPremiumModalOpen] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -604,16 +712,67 @@ export default function App() {
     SUPPORTED_LANGUAGES.find((l) => l.code === profile.language) || SUPPORTED_LANGUAGES[0];
 
   useEffect(() => {
+    ensureCreatorLocked();
+    const freshStatus = getPremiumStatus();
+    setPremiumStatus(freshStatus);
+
+    // Clean any legacy nova_chats localStorage bucket as well
+    try {
+      const legacyRaw = localStorage.getItem('nova_chats');
+      if (legacyRaw) {
+        let legacyChats = JSON.parse(legacyRaw) as Array<{
+          title?: string;
+          messages?: Array<{ text?: string; content?: string }>;
+        }>;
+        if (Array.isArray(legacyChats)) {
+          legacyChats = legacyChats
+            .map((chat) => ({
+              ...chat,
+              title: chat.title ? blockOpenAI(chat.title) : chat.title,
+              messages: Array.isArray(chat.messages)
+                ? chat.messages.map((m) => ({
+                    ...m,
+                    text: typeof m.text === 'string' ? blockOpenAI(m.text) : m.text,
+                    content: typeof m.content === 'string' ? blockOpenAI(m.content) : m.content,
+                  }))
+                : chat.messages,
+            }))
+            .filter((c) => !JSON.stringify(c).toLowerCase().includes('openai'));
+          localStorage.setItem('nova_chats', JSON.stringify(legacyChats));
+        }
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  useEffect(() => {
+    const savedTheme = (() => {
+      try {
+        return localStorage.getItem(THEME_MODE_KEY) || 'normal';
+      } catch {
+        return 'normal';
+      }
+    })();
+    if (savedTheme === 'premium') {
+      document.body.classList.add('premium-user');
+      setThemeMode('premium');
+    } else {
+      document.body.classList.remove('premium-user');
+      setThemeMode('normal');
+    }
+  }, []);
+
+  useEffect(() => {
     document.documentElement.lang = profile.language;
     document.documentElement.dir = langMeta.dir;
   }, [profile.language, langMeta.dir]);
 
-  // Persist local/guest workspace when Firestore isn't active
+  // Persist local workspace in localStorage
   useEffect(() => {
-    if (canUseFirestore) return;
     try {
       localStorage.setItem(
-        GUEST_STORAGE_KEY,
+        activeStorageKey,
         JSON.stringify({
           profile,
           chats,
@@ -624,7 +783,7 @@ export default function App() {
     } catch {
       // ignore storage quota errors
     }
-  }, [canUseFirestore, profile, chats, guestMessagesByChat, savedImages]);
+  }, [activeStorageKey, profile, chats, guestMessagesByChat, savedImages]);
 
   useEffect(() => {
     if (!welcomeBanner) return;
@@ -632,249 +791,10 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [welcomeBanner]);
 
-  // Listen to Firebase Auth state
-  useEffect(() => {
-    const readyFallbackTimer = window.setTimeout(() => {
-      setAuthReady(true);
-    }, 1500);
-
-    const unsub = onAuthStateChanged(auth, async (user) => {
-      window.clearTimeout(readyFallbackTimer);
-      setAuthUser(user);
-      setAuthReady(true);
-
-      if (!user) {
-        const guest = getDefaultGuestProfile();
-        const stored = loadGuestWorkspace();
-        setProfile(guest);
-        setChats(stored.chats);
-        setGuestMessagesByChat(stored.messagesByChat);
-        setSavedImages(stored.savedImages);
-        setFirestoreMessages([]);
-        setWallpaperState(loadWallpaperState('guest'));
-        setMemory(loadMemory('guest'));
-        setActiveChatId(null);
-        return;
-      }
-
-      setWallpaperState(loadWallpaperState(user.uid));
-      const userMem = loadMemory(user.uid);
-      if (!userMem.name && user.displayName) {
-        const seeded = { ...userMem, name: user.displayName, updatedAtMs: Date.now() };
-        saveMemoryToStorage(user.uid, seeded);
-        setMemory(seeded);
-      } else {
-        setMemory(userMem);
-      }
-
-      if (!user.emailVerified) {
-        const stored = loadGuestWorkspace();
-        const base = getDefaultGuestProfile();
-        setProfile({
-          ...base,
-          uid: user.uid,
-          displayName: user.displayName || user.email?.split('@')[0] || 'Nova User',
-          email: user.email || '',
-          photoURL: user.photoURL || '',
-        });
-        setChats(stored.chats);
-        setGuestMessagesByChat(stored.messagesByChat);
-        setSavedImages(stored.savedImages);
-        return;
-      }
-
-      setProfile((prev) => ({
-        ...prev,
-        uid: user.uid,
-        displayName: user.displayName || user.email?.split('@')[0] || 'Nova User',
-        email: user.email || '',
-        photoURL: user.photoURL || '',
-      }));
-    });
-
-    return () => {
-      window.clearTimeout(readyFallbackTimer);
-      unsub();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const userDocReadyPromiseRef = useRef<Promise<void>>(Promise.resolve());
-
-  // Ensure user doc exists and subscribe to Firestore user profile & chats (verified users only)
-  useEffect(() => {
-    if (!authReady || !authUser || !authUser.emailVerified) return;
-
-    let cancelled = false;
-    let unsubUser: (() => void) | undefined;
-    let unsubChats: (() => void) | undefined;
-
-    const uid = authUser.uid;
-    const today = getTodayDateKey();
-    const userRef = doc(db, 'users', uid);
-
-    const initAndSubscribe = async () => {
-      try {
-        const snap = await getDoc(userRef);
-        if (!snap.exists()) {
-          const initialProfile: UserProfile = {
-            uid,
-            displayName: (authUser.displayName || authUser.email?.split('@')[0] || 'Nova User').slice(0, 120),
-            email: (authUser.email || 'user@nova.app').slice(0, 200),
-            photoURL: (authUser.photoURL || '').slice(0, 500),
-            plan: 'free',
-            language: profile.language || 'en',
-            voiceName: profile.voiceName || 'Kore',
-            dailyChatCount: 0,
-            dailyImageCount: 0,
-            lastUsageDate: today,
-          };
-          await setDoc(userRef, {
-            ...initialProfile,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-          if (!cancelled) setProfile(initialProfile);
-        } else {
-          const data = snap.data();
-          if (data.lastUsageDate !== today) {
-            await updateDoc(userRef, {
-              dailyChatCount: 0,
-              dailyImageCount: 0,
-              lastUsageDate: today,
-              updatedAt: serverTimestamp(),
-            }).catch(() => undefined);
-          }
-        }
-      } catch (err) {
-        console.warn('Firestore user profile sync skipped:', err);
-      }
-
-      if (cancelled) return;
-
-      unsubUser = onSnapshot(
-        userRef,
-        (snap) => {
-          if (!snap.exists()) return;
-          const data = snap.data();
-          const isSameDay = data.lastUsageDate === today;
-          setProfile({
-            uid,
-            displayName: String(authUser.displayName || data.displayName || authUser.email?.split('@')[0] || 'Nova User'),
-            email: String(authUser.email || data.email || ''),
-            photoURL: String(authUser.photoURL || data.photoURL || ''),
-            plan: data.plan === 'premium' ? 'premium' : 'free',
-            language: (data.language as LanguageCode) || 'en',
-            voiceName: (data.voiceName as VoiceName) || 'Kore',
-            dailyChatCount: isSameDay ? Number(data.dailyChatCount || 0) : 0,
-            dailyImageCount: isSameDay ? Number(data.dailyImageCount || 0) : 0,
-            lastUsageDate: isSameDay ? String(data.lastUsageDate) : today,
-          });
-        },
-        (error) => console.warn('Firestore user listener warning:', error)
-      );
-
-      const chatsQuery = query(collection(db, 'users', uid, 'chats'), where('userId', '==', uid));
-      unsubChats = onSnapshot(
-        chatsQuery,
-        (snapshot) => {
-          const loaded: ChatSession[] = snapshot.docs.map((d) => {
-            const data = d.data();
-            const updatedAtMs =
-              data.updatedAt && typeof data.updatedAt.toMillis === 'function'
-                ? data.updatedAt.toMillis()
-                : Date.now();
-            return {
-              id: d.id,
-              userId: String(data.userId || uid),
-              title: String(data.title || 'New Chat'),
-              lastMessagePreview: String(data.lastMessagePreview || ''),
-              updatedAtMs,
-            };
-          });
-          loaded.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
-          setChats(loaded);
-        },
-        (error) => console.warn('Firestore chats listener warning:', error)
-      );
-    };
-
-    userDocReadyPromiseRef.current = initAndSubscribe();
-
-    return () => {
-      cancelled = true;
-      unsubUser?.();
-      unsubChats?.();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authReady, authUser]);
-
-  // Subscribe to Firestore messages for active chat & populate savedImages
-  useEffect(() => {
-    if (!authReady || !authUser || !authUser.emailVerified || !activeChatId) {
-      setFirestoreMessages([]);
-      return;
-    }
-
-    const uid = authUser.uid;
-    const msgQuery = query(
-      collection(db, 'users', uid, 'chats', activeChatId, 'messages'),
-      where('userId', '==', uid)
-    );
-
-    const unsub = onSnapshot(
-      msgQuery,
-      (snapshot) => {
-        const list: ChatMessage[] = snapshot.docs.map((d) => {
-          const data = d.data();
-          const createdAtMs =
-            data.createdAt && typeof data.createdAt.toMillis === 'function'
-              ? data.createdAt.toMillis()
-              : Date.now();
-          return {
-            id: d.id,
-            chatId: String(data.chatId || activeChatId),
-            role: data.role === 'assistant' ? 'assistant' : 'user',
-            kind:
-              data.kind === 'image' || data.kind === 'voice' ? data.kind : 'text',
-            content: String(data.content || ''),
-            imageDataUrl: data.imageDataUrl ? String(data.imageDataUrl) : undefined,
-            imageUrls: Array.isArray(data.imageUrls)
-              ? data.imageUrls.map(String)
-              : undefined,
-            imagePrompt: data.imagePrompt ? String(data.imagePrompt) : undefined,
-            createdAtMs,
-          };
-        });
-        list.sort((a, b) => a.createdAtMs - b.createdAtMs);
-        setFirestoreMessages(list);
-      },
-      (error) => console.warn('Firestore messages listener warning:', error)
-    );
-
-    return () => unsub();
-  }, [authReady, authUser, activeChatId]);
-
   const activeMessages = useMemo(() => {
     if (!activeChatId) return [];
-    const base = canUseFirestore
-      ? firestoreMessages
-      : guestMessagesByChat[activeChatId] || [];
-    const pending = optimisticMessagesByChat[activeChatId] || [];
-    if (pending.length === 0) return base;
-    const seen = new Set(base.map((m) => m.id));
-    const merged = [...base];
-    for (const p of pending) {
-      if (!seen.has(p.id)) merged.push(p);
-    }
-    return merged.sort((a, b) => a.createdAtMs - b.createdAtMs);
-  }, [
-    activeChatId,
-    canUseFirestore,
-    firestoreMessages,
-    guestMessagesByChat,
-    optimisticMessagesByChat,
-  ]);
+    return guestMessagesByChat[activeChatId] || [];
+  }, [activeChatId, guestMessagesByChat]);
 
   // Collect saved real images from current messages as well (exclude legacy SVG placeholders)
   const allHistoryImages = useMemo(() => {
@@ -935,28 +855,47 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [voiceHint]);
 
-  const handleSignInGoogle = async () => {
+  const switchLocalAccountWorkspace = useCallback((email: string | null) => {
+    const key = getWorkspaceStorageKey(email);
+    const uidKey = email || 'guest';
+    const loaded = loadWorkspaceFromStorage(key);
+    setProfile(getDefaultProfileForUser(email));
+    setChats(loaded.chats);
+    setGuestMessagesByChat(loaded.messagesByChat);
+    setSavedImages(loaded.savedImages);
+    setWallpaperState(loadWallpaperState(uidKey));
+    setMemory(loadMemory(uidKey));
+    setActiveChatId(null);
+    setActiveView('chat');
+    setMobileDrawerOpen(false);
+  }, []);
+
+  const handleLocalSignUp = (email: string, password: string): LocalAuthResult => {
     setAuthError(null);
-    try {
-      const cred = await signInWithPopup(auth, googleProvider);
-      setGuestSessionActive(false);
-      try {
-        localStorage.removeItem(GUEST_SESSION_KEY);
-      } catch {
-        // ignore
-      }
-      const userName = cred.user.displayName || cred.user.email?.split('@')[0] || 'Nova User';
-      setProfile((prev) => ({
-        ...prev,
-        uid: cred.user.uid,
-        displayName: userName,
-        email: cred.user.email || prev.email,
-        photoURL: cred.user.photoURL || prev.photoURL,
-      }));
-      setWelcomeBanner(`Welcome, ${userName}`);
-    } catch (err) {
-      setAuthError(sanitizeFriendlyError(err, 'Google sign-in could not be completed.'));
+    const res = localSignUp(email, password);
+    if (!res.ok || !res.email) {
+      setAuthError(res.message);
+      return res;
     }
+    setCurrentUserEmail(res.email);
+    setGuestSessionActive(true);
+    switchLocalAccountWorkspace(res.email);
+    setWelcomeBanner(res.message);
+    return res;
+  };
+
+  const handleLocalSignIn = (email: string, password: string): LocalAuthResult => {
+    setAuthError(null);
+    const res = localSignIn(email, password);
+    if (!res.ok || !res.email) {
+      setAuthError(res.message);
+      return res;
+    }
+    setCurrentUserEmail(res.email);
+    setGuestSessionActive(true);
+    switchLocalAccountWorkspace(res.email);
+    setWelcomeBanner(res.message);
+    return res;
   };
 
   const handleContinueAsGuest = () => {
@@ -964,18 +903,23 @@ export default function App() {
     setGuestSessionActive(true);
   };
 
+  const handleOpenLogin = () => {
+    setAuthError(null);
+    setGuestSessionActive(false);
+    setMobileDrawerOpen(false);
+  };
+
   const handleSignOut = async () => {
-    await signOut(auth).catch(() => undefined);
+    localLogout();
+    setCurrentUserEmail(null);
     setGuestSessionActive(false);
     try {
       localStorage.removeItem(GUEST_SESSION_KEY);
     } catch {
       // ignore
     }
+    switchLocalAccountWorkspace(null);
     setWelcomeBanner(null);
-    setActiveChatId(null);
-    setActiveView('chat');
-    setMobileDrawerOpen(false);
   };
 
   const handleChangeVoiceSpeed = (speed: VoiceSpeed) => {
@@ -991,15 +935,6 @@ export default function App() {
     patch: Partial<Pick<UserProfile, 'language' | 'voiceName' | 'plan'>>
   ) => {
     setProfile((prev) => ({ ...prev, ...patch }));
-    if (!canUseFirestore || !authUser) return;
-    try {
-      await updateDoc(doc(db, 'users', authUser.uid), {
-        ...patch,
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      console.warn('Preference update skipped:', err);
-    }
   };
 
   const incrementUsage = async (type: 'chat' | 'image') => {
@@ -1014,21 +949,10 @@ export default function App() {
       dailyImageCount: nextImageCount,
       lastUsageDate: today,
     }));
-
-    if (!canUseFirestore || !authUser) return;
-    try {
-      await updateDoc(doc(db, 'users', authUser.uid), {
-        dailyChatCount: nextChatCount,
-        dailyImageCount: nextImageCount,
-        lastUsageDate: today,
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      console.warn('Usage counter sync skipped:', err);
-    }
   };
 
   const handleNewChat = () => {
+    ensureCreatorLocked();
     setActiveChatId(null);
     setActiveView('chat');
     setVoiceHint(null);
@@ -1037,7 +961,7 @@ export default function App() {
     heroInputRef.current?.focus();
   };
 
-  const storageUidKey = authUser ? authUser.uid : 'guest';
+
 
   const handleUpdateMemory = (patch: Partial<NovaMemory>) => {
     setMemory((prev) => {
@@ -1065,42 +989,80 @@ export default function App() {
     });
   };
 
+  const applyNormal = useCallback(
+    (clearCustomBackdrop = true) => {
+      document.body.classList.remove('premium-user');
+      setThemeMode('normal');
+      try {
+        localStorage.setItem(THEME_MODE_KEY, 'normal');
+      } catch {
+        // ignore storage errors
+      }
+      if (clearCustomBackdrop) {
+        updateWallpaperState({ appliedAsBackground: false });
+      }
+    },
+    [storageUidKey]
+  );
+
+  const applyPremium = useCallback(() => {
+    document.body.classList.add('premium-user');
+    setThemeMode('premium');
+    try {
+      localStorage.setItem(THEME_MODE_KEY, 'premium');
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  const handleSelectThemeMode = useCallback(
+    (mode: 'normal' | 'premium') => {
+      if (mode === 'premium') {
+        applyPremium();
+      } else {
+        applyNormal(true);
+      }
+    },
+    [applyNormal, applyPremium]
+  );
+
+  const handleToggleEarth = useCallback(() => {
+    setEarthEnabled((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(EARTH_BG_KEY, next ? 'true' : 'false');
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }, []);
+
+  const handlePremiumStatusUpdated = useCallback(
+    (next: PremiumStatus, celebration?: string) => {
+      setPremiumStatus(next);
+      if (next.isPremium) {
+        setProfile((prev) => ({ ...prev, plan: 'premium' }));
+        applyPremium();
+      }
+      if (celebration) {
+        setWelcomeBanner(celebration);
+      }
+    },
+    [applyPremium]
+  );
+
   const wallpaperAttemptedDateRef = useRef<string>('');
 
   const handleGenerateWallpaper = async (style: WallpaperStyle) => {
     if (isGeneratingWallpaper) return;
     setIsGeneratingWallpaper(true);
-    setWallpaperError(null);
     const seed = Date.now();
+    const directFallbackUrl = buildFastPollinationsUrl(
+      `${style} serene luxury mobile wallpaper`,
+      seed
+    );
     try {
-      const res = await fetch('/api/wallpaper', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ style, seed }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        imageUrl?: string | null;
-        title?: string;
-        quote?: string;
-      };
-
-      const title = data.title || `${style} Horizon`;
-      const quote = data.quote || 'Begin today with clarity and calm.';
-      const directFallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(
-        `safe, family friendly, ${style} serene luxury vertical 9:16 mobile wallpaper, vibrant natural colours`
-      )}?width=720&height=1280&model=turbo&nologo=true&safe=true&seed=${seed}`;
-
-      updateWallpaperState({
-        style,
-        currentImageUrl: data.imageUrl || directFallbackUrl,
-        currentTitle: title,
-        currentQuote: quote,
-        lastGeneratedDate: getTodayDateKey(),
-      });
-    } catch {
-      const directFallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(
-        `safe, family friendly, ${style} serene luxury vertical 9:16 mobile wallpaper, vibrant natural colours`
-      )}?width=720&height=1280&model=turbo&nologo=true&safe=true&seed=${seed}`;
       updateWallpaperState({
         style,
         currentImageUrl: directFallbackUrl,
@@ -1108,6 +1070,7 @@ export default function App() {
         currentQuote: 'Begin today with clarity and calm.',
         lastGeneratedDate: getTodayDateKey(),
       });
+      playImageGenerated();
     } finally {
       setIsGeneratingWallpaper(false);
     }
@@ -1164,59 +1127,21 @@ export default function App() {
     e.stopPropagation();
     if (activeChatId === chatId) setActiveChatId(null);
 
-    if (!canUseFirestore || !authUser) {
-      setChats((prev) => prev.filter((c) => c.id !== chatId));
-      setGuestMessagesByChat((prev) => {
-        const next = { ...prev };
-        delete next[chatId];
-        return next;
-      });
-      setSavedImages((prev) => prev.filter((img) => img.chatId !== chatId));
-      return;
-    }
-
-    const uid = authUser.uid;
-    try {
-      const msgSnap = await getDocs(
-        query(collection(db, 'users', uid, 'chats', chatId, 'messages'), where('userId', '==', uid))
-      );
-      const batch = writeBatch(db);
-      msgSnap.docs.forEach((d) => batch.delete(d.ref));
-      batch.delete(doc(db, 'users', uid, 'chats', chatId));
-      await batch.commit();
-    } catch (err) {
-      console.warn('Delete chat failed:', err);
-    }
+    setChats((prev) => prev.filter((c) => c.id !== chatId));
+    setGuestMessagesByChat((prev) => {
+      const next = { ...prev };
+      delete next[chatId];
+      return next;
+    });
+    setSavedImages((prev) => prev.filter((img) => img.chatId !== chatId));
   };
 
   const handleClearAllHistory = async () => {
+    ensureCreatorLocked();
     setActiveChatId(null);
     setSavedImages([]);
-    if (!canUseFirestore || !authUser) {
-      setChats([]);
-      setGuestMessagesByChat({});
-      return;
-    }
-    const uid = authUser.uid;
-    try {
-      const chatSnap = await getDocs(
-        query(collection(db, 'users', uid, 'chats'), where('userId', '==', uid))
-      );
-      for (const chatDoc of chatSnap.docs) {
-        const msgSnap = await getDocs(
-          query(
-            collection(db, 'users', uid, 'chats', chatDoc.id, 'messages'),
-            where('userId', '==', uid)
-          )
-        );
-        const batch = writeBatch(db);
-        msgSnap.docs.forEach((m) => batch.delete(m.ref));
-        batch.delete(chatDoc.ref);
-        await batch.commit();
-      }
-    } catch (err) {
-      console.warn('Clear history failed:', err);
-    }
+    setChats([]);
+    setGuestMessagesByChat({});
   };
 
   const saveClientReplyCache = useCallback((cacheKey: string, replyText: string) => {
@@ -1238,30 +1163,6 @@ export default function App() {
     }
   }, []);
 
-  const appendOptimisticMessage = useCallback(
-    (chatId: string, msg: ChatMessage) => {
-      setOptimisticMessagesByChat((prev) => ({
-        ...prev,
-        [chatId]: [...(prev[chatId] || []), msg],
-      }));
-    },
-    []
-  );
-
-  const removeOptimisticMessage = useCallback((chatId: string, msgId: string) => {
-    setOptimisticMessagesByChat((prev) => {
-      const list = prev[chatId];
-      if (!list || list.length === 0) return prev;
-      const filtered = list.filter((m) => m.id !== msgId);
-      if (filtered.length === 0) {
-        const next = { ...prev };
-        delete next[chatId];
-        return next;
-      }
-      return { ...prev, [chatId]: filtered };
-    });
-  }, []);
-
   const ensureChatSessionSync = (
     firstPrompt: string
   ): { chatId: string; persistPromise: Promise<void> } => {
@@ -1273,36 +1174,16 @@ export default function App() {
     const title = firstPrompt.trim().slice(0, 64) || t.newChat;
     const preview = firstPrompt.trim().slice(0, 120);
 
-    if (!canUseFirestore || !authUser) {
-      const session: ChatSession = {
-        id: newChatId,
-        userId: authUser ? authUser.uid : 'guest',
-        title,
-        lastMessagePreview: preview,
-        updatedAtMs: Date.now(),
-      };
-      setChats((prev) => [session, ...prev]);
-      setActiveChatId(newChatId);
-      return { chatId: newChatId, persistPromise: Promise.resolve() };
-    }
-
-    const uid = authUser.uid;
+    const session: ChatSession = {
+      id: newChatId,
+      userId: storageUidKey,
+      title,
+      lastMessagePreview: preview,
+      updatedAtMs: Date.now(),
+    };
+    setChats((prev) => [session, ...prev]);
     setActiveChatId(newChatId);
-    const persistPromise = userDocReadyPromiseRef.current
-      .catch(() => undefined)
-      .then(() =>
-        setDoc(doc(db, 'users', uid, 'chats', newChatId), {
-          userId: uid,
-          title,
-          lastMessagePreview: preview,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        })
-      )
-      .catch((err) => {
-        console.warn('Chat session persistence skipped:', err);
-      });
-    return { chatId: newChatId, persistPromise };
+    return { chatId: newChatId, persistPromise: Promise.resolve() };
   };
 
   const ensureChatSession = async (firstPrompt: string): Promise<string> => {
@@ -1319,110 +1200,51 @@ export default function App() {
   ): Promise<string> => {
     const messageId = customId || createId('msg');
     const createdAtMs = customCreatedAtMs ?? Date.now();
-    if (!canUseFirestore || !authUser) {
-      const created: ChatMessage = {
-        id: messageId,
-        chatId,
-        ...msg,
-        createdAtMs,
-      };
-      setGuestMessagesByChat((prev) => ({
-        ...prev,
-        [chatId]: [...(prev[chatId] || []), created],
-      }));
-      const previewText = /<img\b/i.test(msg.content)
-        ? (msg.imagePrompt || 'Generated image').slice(0, 120)
-        : msg.content.slice(0, 120);
-      setChats((prev) =>
-        prev
-          .map((c) =>
-            c.id === chatId
-              ? {
-                  ...c,
-                  lastMessagePreview: previewText,
-                  updatedAtMs: createdAtMs,
-                }
-              : c
-          )
-          .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
-      );
-      return messageId;
-    }
-
-    const uid = authUser.uid;
-    try {
-      const payload: Record<string, unknown> = {
-        userId: uid,
-        chatId,
-        role: msg.role,
-        kind: msg.kind,
-        content: msg.content.slice(0, 49000),
-        createdAt: serverTimestamp(),
-      };
-      if (msg.imageDataUrl) {
-        payload.imageDataUrl = await compressDataUrlForStorage(msg.imageDataUrl);
-      }
-      if (msg.imageUrls && msg.imageUrls.length > 0) {
-        const compressedList = await Promise.all(
-          msg.imageUrls.slice(0, 4).map((u) => compressDataUrlForStorage(u))
-        );
-        // Keep combined doc payload comfortably under Firestore 1MB limit
-        const totalSize = compressedList.reduce((acc, s) => acc + s.length, 0);
-        if (totalSize < 820000) {
-          payload.imageUrls = compressedList;
-        }
-      }
-      if (msg.imagePrompt) {
-        payload.imagePrompt = msg.imagePrompt.slice(0, 1900);
-      }
-      await setDoc(doc(db, 'users', uid, 'chats', chatId, 'messages', messageId), payload);
-      removeOptimisticMessage(chatId, messageId);
-      const previewText = /<img\b/i.test(msg.content)
-        ? (msg.imagePrompt || 'Generated image').slice(0, 120)
-        : msg.content.slice(0, 120);
-      await updateDoc(doc(db, 'users', uid, 'chats', chatId), {
-        lastMessagePreview: previewText,
-        updatedAt: serverTimestamp(),
-      });
-      return messageId;
-    } catch (err) {
-      console.warn('Message persistence skipped:', err);
-      return messageId;
-    }
+    const created: ChatMessage = {
+      id: messageId,
+      chatId,
+      ...msg,
+      createdAtMs,
+    };
+    setGuestMessagesByChat((prev) => ({
+      ...prev,
+      [chatId]: [...(prev[chatId] || []), created],
+    }));
+    const previewText = /<img\b/i.test(msg.content)
+      ? (msg.imagePrompt || 'Generated image').slice(0, 120)
+      : msg.content.slice(0, 120);
+    setChats((prev) =>
+      prev
+        .map((c) =>
+          c.id === chatId
+            ? {
+                ...c,
+                lastMessagePreview: previewText,
+                updatedAtMs: createdAtMs,
+              }
+            : c
+        )
+        .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
+    );
+    return messageId;
   };
 
-  const buildPollinationsImageUrl = (
-    promptText: string,
-    _genMode: ImageGenMode,
-    _style?: ImageStyle,
-    seed?: number
-  ): string => {
-    const cleanThing = cleanSafeImagePrompt(promptText);
-    const seedValue = seed ?? Date.now();
-    return `https://image.pollinations.ai/prompt/${encodeURIComponent(
-      `safe, family friendly, ${cleanThing}, vibrant natural colours`
-    )}?width=1024&height=1024&model=turbo&nologo=true&safe=true&seed=${seedValue}`;
-  };
-
-  const runImageGeneration = async (
+  const runImageGeneration = (
     chatId: string,
     promptText: string,
     count: 1 | 4,
     _sourceAttachment: typeof attachedImage,
-    overrides?: { styleOverride?: ImageStyle; ratioOverride?: AspectRatio; genModeOverride?: ImageGenMode },
-    afterPromise: Promise<unknown> = Promise.resolve()
+    _overrides?: { styleOverride?: ImageStyle; ratioOverride?: AspectRatio; genModeOverride?: ImageGenMode },
+    _afterPromise: Promise<unknown> = Promise.resolve()
   ) => {
     setImageStudioError(null);
-    const activeGenMode = overrides?.genModeOverride || imageGenMode;
-    const activeStyle = overrides?.styleOverride || imageStyle;
-
     const baseSeed = Date.now();
     const urls: string[] =
       count === 4
         ? Array.from({ length: 4 }, (_, idx) =>
-            buildPollinationsImageUrl(promptText, activeGenMode, activeStyle, baseSeed + idx)
+            getOrCreateFastImageUrl(promptText, baseSeed + idx, true)
           )
-        : [buildPollinationsImageUrl(promptText, activeGenMode, activeStyle, baseSeed)];
+        : [getOrCreateFastImageUrl(promptText, baseSeed, false)];
 
     const assistantMsgId = createId('msg');
     const assistantCreatedAtMs = Date.now();
@@ -1432,39 +1254,25 @@ export default function App() {
       content: `<img src='${urls[0]}' />`,
       imageDataUrl: urls[0],
       imageUrls: urls,
-      imagePrompt: promptText,
+      imagePrompt: cleanSafeImagePrompt(promptText),
     };
 
-    if (canUseFirestore) {
-      appendOptimisticMessage(chatId, {
-        id: assistantMsgId,
-        chatId,
-        ...assistantMsgPayload,
-        createdAtMs: assistantCreatedAtMs,
-      });
-      void afterPromise
-        .catch(() => undefined)
-        .then(() =>
-          saveMessage(chatId, assistantMsgPayload, assistantMsgId, assistantCreatedAtMs)
-        )
-        .catch(() => undefined);
-    } else {
-      void saveMessage(chatId, assistantMsgPayload, assistantMsgId, assistantCreatedAtMs).catch(
-        () => undefined
-      );
-    }
+    void saveMessage(chatId, assistantMsgPayload, assistantMsgId, assistantCreatedAtMs).catch(
+      () => undefined
+    );
 
     if (urls[0]) {
       setSavedImages((prev) => [
         {
           id: assistantMsgId,
           chatId,
-          prompt: promptText,
+          prompt: cleanSafeImagePrompt(promptText),
           imageUrl: urls[0],
           createdAtMs: assistantCreatedAtMs,
         },
         ...prev.filter((item) => !item.imageUrl.startsWith('data:image/svg+xml')).slice(0, 29),
       ]);
+      playImageGenerated();
     }
     setIsGeneratingImage(false);
   };
@@ -1543,7 +1351,7 @@ export default function App() {
         content:
           'What kind of website/app you want? Shop, Portfolio, School, Church, Restaurant?\n[[NOVA_BUILDER_CATEGORIES]]',
       });
-      setTimeout(() => bottomInputRef.current?.focus(), 60);
+      bottomInputRef.current?.focus();
     } catch {
       // ignore
     }
@@ -1582,6 +1390,7 @@ export default function App() {
     const currentAttachment = attachedImage;
     const raw = rawPrompt.trim();
     if (!raw || isSending) return;
+    playMessageSend();
 
     const lastAssistantMsg = [...activeMessages].reverse().find((m) => m.role === 'assistant');
     const lastAssistantAskedCategory = Boolean(
@@ -1630,9 +1439,9 @@ export default function App() {
     setIsSending(true);
     setActiveView('chat');
 
-    const { chatId, persistPromise: chatPersistPromise } = ensureChatSessionSync(effectivePrompt);
+    const { chatId } = ensureChatSessionSync(effectivePrompt);
     const activeSessionId: string | null = chatId;
-    const historyBefore = canUseFirestore ? activeMessages : guestMessagesByChat[chatId] || [];
+    const historyBefore = guestMessagesByChat[chatId] || [];
 
     const userMsgId = createId('msg');
     const userCreatedAtMs = Date.now();
@@ -1643,25 +1452,17 @@ export default function App() {
       imageDataUrl: currentAttachment?.previewUrl,
     };
 
-    let persistUserMsgPromise: Promise<unknown> = Promise.resolve();
-    if (canUseFirestore) {
-      appendOptimisticMessage(chatId, {
-        id: userMsgId,
-        chatId,
-        ...userMsgPayload,
-        createdAtMs: userCreatedAtMs,
-      });
-      persistUserMsgPromise = chatPersistPromise.then(() =>
-        saveMessage(chatId, userMsgPayload, userMsgId, userCreatedAtMs)
-      );
-    } else {
-      void saveMessage(chatId, userMsgPayload, userMsgId, userCreatedAtMs);
-    }
+    const persistUserMsgPromise: Promise<unknown> = saveMessage(
+      chatId,
+      userMsgPayload,
+      userMsgId,
+      userCreatedAtMs
+    );
 
     try {
       if (useImage) {
         void incrementUsage('image').catch(() => undefined);
-        await runImageGeneration(
+        runImageGeneration(
           chatId,
           effectivePrompt,
           1,
@@ -1670,6 +1471,7 @@ export default function App() {
           persistUserMsgPromise
         );
         setImageMode(false);
+        return;
       } else {
         const updatedMem = extractMemoryFromPrompt(raw, memory);
         if (updatedMem !== memory) {
@@ -1677,9 +1479,39 @@ export default function App() {
           saveMemoryToStorage(storageUidKey, updatedMem);
         }
 
-        // Non-blocking usage & cache check
+        // Non-blocking usage increment
         void incrementUsage('chat').catch(() => undefined);
 
+        const pushInstantAssistantReply = (replyContent: string) => {
+          const filteredContent = blockOpenAI(replyContent);
+          const assistantMsgId = createId('msg');
+          const assistantCreatedAtMs = Date.now();
+          void saveMessage(
+            chatId,
+            { role: 'assistant', kind: 'text', content: filteredContent },
+            assistantMsgId,
+            assistantCreatedAtMs
+          );
+          setStreamingContent('');
+        };
+
+        // 0. Unconditional creator & identity lock (runs even if Instant Mode is OFF)
+        const lockedIdentityReply = getCreatorIdentityOverride(raw);
+        if (lockedIdentityReply) {
+          pushInstantAssistantReply(lockedIdentityReply);
+          return;
+        }
+
+        // 1. Instant Mode client-side replies (< 1ms, zero server wait)
+        if (instantMode && !currentAttachment) {
+          const instantReply = getInstantClientReply(raw, updatedMem, historyBefore.length);
+          if (instantReply) {
+            pushInstantAssistantReply(instantReply);
+            return;
+          }
+        }
+
+        // 2. Client browser reply cache
         const clientCacheKey = getClientReplyCacheKey(
           raw,
           profile.language,
@@ -1689,34 +1521,7 @@ export default function App() {
         const cachedAnswer = clientCacheKey ? replyCacheRef.current[clientCacheKey] : undefined;
 
         if (cachedAnswer) {
-          const assistantMsgId = createId('msg');
-          const assistantCreatedAtMs = Date.now();
-          if (canUseFirestore) {
-            appendOptimisticMessage(chatId, {
-              id: assistantMsgId,
-              chatId,
-              role: 'assistant',
-              kind: 'text',
-              content: cachedAnswer,
-              createdAtMs: assistantCreatedAtMs,
-            });
-            void persistUserMsgPromise.then(() =>
-              saveMessage(
-                chatId,
-                { role: 'assistant', kind: 'text', content: cachedAnswer },
-                assistantMsgId,
-                assistantCreatedAtMs
-              )
-            );
-          } else {
-            void saveMessage(
-              chatId,
-              { role: 'assistant', kind: 'text', content: cachedAnswer },
-              assistantMsgId,
-              assistantCreatedAtMs
-            );
-          }
-          setStreamingContent('');
+          pushInstantAssistantReply(blockOpenAI(cachedAnswer));
           return;
         }
 
@@ -1730,15 +1535,21 @@ export default function App() {
           .map((m) => `${m.role === 'assistant' ? 'Nova' : 'User'}: ${m.content.slice(0, 140)}`)
           .join(' | ');
 
+        const shouldPassUserName =
+          Boolean(updatedMem.name) &&
+          (historyBefore.length === 0 || historyBefore.length % 20 === 0);
+
         const memorySnippet = [
-          updatedMem.name ? `Name: ${updatedMem.name}` : '',
+          shouldPassUserName ? `Name (use sparingly, not every reply): ${updatedMem.name}` : '',
           updatedMem.favouriteStyle ? `Style: ${updatedMem.favouriteStyle}` : '',
           updatedMem.preferredLanguage ? `Language: ${updatedMem.preferredLanguage}` : '',
         ]
           .filter(Boolean)
           .join(', ');
 
-        const lengthRule = wantsLongReply ? 'Give a detailed reply.' : 'Keep normal text replies friendly and short (max 2-3 sentences).';
+        const lengthRule = wantsLongReply
+          ? 'Give a detailed reply.'
+          : 'Keep normal text replies friendly and short (max 2-3 sentences). Chat naturally; do not repeat the user name or mention your creator unless asked.';
         const modeHint = `Current image mode: ${imageGenMode === 'ai-art' ? 'digital art' : 'real photo'}.`;
         const systemInstruction = `${NOVA_SYSTEM_PROMPT}\n${lengthRule} ${modeHint}${memorySnippet ? ` [${memorySnippet}]` : ''}`;
         const userTurnPrompt = [
@@ -1749,42 +1560,6 @@ export default function App() {
           .filter(Boolean)
           .join(' ')
           .slice(0, 750);
-
-        const runPollinationsGet = async (
-          promptText: string,
-          modelName: string,
-          systemText?: string
-        ): Promise<string> => {
-          const url = new URL(`https://text.pollinations.ai/${encodeURIComponent(promptText)}`);
-          url.searchParams.set('model', modelName);
-          if (systemText) {
-            url.searchParams.set('system', systemText);
-          }
-          const controller = new AbortController();
-          const timer = window.setTimeout(() => controller.abort(new Error('Request timed out')), 14000);
-          try {
-            const res = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
-            const textBody = await res.text();
-            if (!res.ok) {
-              const retryAfter = Number(res.headers.get('retry-after') || '0');
-              const detail = textBody.trim().slice(0, 180) || res.statusText || 'Request failed';
-              const err = new Error(`HTTP ${res.status} (${modelName}): ${detail}`) as Error & {
-                status?: number;
-                retryAfter?: number;
-              };
-              err.status = res.status;
-              err.retryAfter = retryAfter;
-              throw err;
-            }
-            const clean = textBody.trim();
-            if (!clean) {
-              throw new Error(`Empty response from ${modelName}`);
-            }
-            return clean;
-          } finally {
-            window.clearTimeout(timer);
-          }
-        };
 
         const runSameOriginChatGet = async (
           promptText: string,
@@ -1804,7 +1579,33 @@ export default function App() {
             error?: string;
           };
           if (!res.ok || !data.reply) {
-            throw new Error(data.error || `Chat GET proxy failed (HTTP ${res.status})`);
+            throw new Error(data.error || `HTTP ${res.status}`);
+          }
+          return data.reply.trim();
+        };
+
+        const runSameOriginChatPost = async (): Promise<string> => {
+          const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: raw,
+              conversationHistory: historyBefore.slice(-6).map((m) => ({
+                role: m.role,
+                content: m.content,
+              })),
+              stream: false,
+              uiLanguage: profile.language,
+              memory: updatedMem,
+            }),
+          });
+          const data = (await res.json().catch(() => ({}))) as {
+            success?: boolean;
+            reply?: string;
+            error?: string;
+          };
+          if (!res.ok || !data.reply) {
+            throw new Error(data.error || `HTTP ${res.status}`);
           }
           return data.reply.trim();
         };
@@ -1812,94 +1613,54 @@ export default function App() {
         let replyText = '';
         try {
           replyText = await runSameOriginChatGet(userTurnPrompt, systemInstruction);
-        } catch (proxyErr) {
-          console.warn('Same-origin chat GET proxy fallback triggered:', proxyErr);
+        } catch {
           try {
-            replyText = await runPollinationsGet(userTurnPrompt, 'openai-fast', systemInstruction);
+            replyText = await runSameOriginChatPost();
           } catch {
-            replyText = await runPollinationsGet(raw, 'openai', systemInstruction);
+            replyText =
+              'Connection hiccup—send that again in a second!';
           }
         }
 
         let finalReply = replyText.trim();
         if (isImageRefusalReply(finalReply)) {
-          const safePrompt = cleanSafeImagePrompt(raw);
-          const randomSeed = Date.now();
-          finalReply = `<img src='https://image.pollinations.ai/prompt/${encodeURIComponent(
-            `safe, family friendly, ${safePrompt}, vibrant natural colours`
-          )}?width=1024&height=1024&model=turbo&nologo=true&safe=true&seed=${randomSeed}' />`;
+          const backupUrl = buildVerticalWallpaperBackupUrl(raw, Date.now());
+          const backupMsgId = createId('msg');
+          const backupCreatedAtMs = Date.now();
+          const backupPayload: Omit<ChatMessage, 'id' | 'chatId' | 'createdAtMs'> = {
+            role: 'assistant',
+            kind: 'image',
+            content: `<img src='${backupUrl}' />`,
+            imageDataUrl: backupUrl,
+            imageUrls: [backupUrl],
+            imagePrompt: cleanSafeImagePrompt(raw),
+          };
+          void saveMessage(chatId, backupPayload, backupMsgId, backupCreatedAtMs);
+          playImageGenerated();
+          setStreamingContent('');
+          return;
         }
+        finalReply = blockOpenAI(finalReply);
         if (finalReply && clientCacheKey) {
           saveClientReplyCache(clientCacheKey, finalReply);
         }
 
-        const assistantMsgId = createId('msg');
-        const assistantCreatedAtMs = Date.now();
-        if (canUseFirestore) {
-          appendOptimisticMessage(chatId, {
-            id: assistantMsgId,
-            chatId,
-            role: 'assistant',
-            kind: 'text',
-            content: finalReply,
-            createdAtMs: assistantCreatedAtMs,
-          });
-          void persistUserMsgPromise.then(() =>
-            saveMessage(
-              chatId,
-              { role: 'assistant', kind: 'text', content: finalReply },
-              assistantMsgId,
-              assistantCreatedAtMs
-            )
-          );
-        } else {
-          void saveMessage(
-            chatId,
-            { role: 'assistant', kind: 'text', content: finalReply },
-            assistantMsgId,
-            assistantCreatedAtMs
-          );
-        }
-        setStreamingContent('');
+        pushInstantAssistantReply(finalReply);
       }
-    } catch (err) {
+    } catch {
       setStreamingContent('');
       setIsGeneratingImage(false);
-      console.error('Nova sendMessage error:', err);
-      const realError =
-        err instanceof Error && err.message.trim()
-          ? err.message.trim()
-          : 'Unable to reach Pollinations AI right now. Please try again.';
       if (activeSessionId) {
+        const fallbackMsg =
+          "I'm ready—please try sending that message again.";
         const errMsgId = createId('msg');
         const errCreatedAtMs = Date.now();
-        if (canUseFirestore) {
-          appendOptimisticMessage(activeSessionId, {
-            id: errMsgId,
-            chatId: activeSessionId,
-            role: 'assistant',
-            kind: 'text',
-            content: realError,
-            createdAtMs: errCreatedAtMs,
-          });
-          void persistUserMsgPromise
-            .then(() =>
-              saveMessage(
-                activeSessionId,
-                { role: 'assistant', kind: 'text', content: realError },
-                errMsgId,
-                errCreatedAtMs
-              )
-            )
-            .catch(() => undefined);
-        } else {
-          void saveMessage(
-            activeSessionId,
-            { role: 'assistant', kind: 'text', content: realError },
-            errMsgId,
-            errCreatedAtMs
-          ).catch(() => undefined);
-        }
+        void saveMessage(
+          activeSessionId,
+          { role: 'assistant', kind: 'text', content: fallbackMsg },
+          errMsgId,
+          errCreatedAtMs
+        ).catch(() => undefined);
       }
     } finally {
       setIsSending(false);
@@ -2085,17 +1846,17 @@ export default function App() {
     <div className="w-full max-w-5xl mx-auto space-y-1.5">
       {/* Image Studio Controls above Chat Box when Image Mode is Active */}
       {imageMode && (
-        <div className="rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/40 p-2.5 flex flex-col gap-2">
+        <div className="rounded-lg bg-[#171717] border border-[#2a2a2a] p-2.5 flex flex-col gap-2">
           <div className="flex items-center gap-1.5 flex-wrap">
             {IMAGE_STYLES.map((style) => (
               <button
                 key={style}
                 type="button"
                 onClick={() => setImageStyle(style)}
-                className={`px-2.5 py-1 rounded-xl text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
                   imageStyle === style
-                    ? 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] border-[#BF5AF2] text-white nova-btn-glow'
-                    : 'bg-black border-[#A855F7]/25 text-white/75 hover:text-white hover:border-[#BF5AF2]'
+                    ? 'bg-white border-white text-black'
+                    : 'bg-[#0f0f0f] border-[#2a2a2a] text-neutral-300 hover:text-white hover:border-neutral-500'
                 }`}
               >
                 {style}
@@ -2103,35 +1864,35 @@ export default function App() {
             ))}
           </div>
 
-          <div className="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-[#A855F7]/20">
+          <div className="flex items-center justify-between gap-2 flex-wrap pt-1.5 border-t border-[#2a2a2a]">
             <div className="flex items-center gap-1.5 flex-wrap">
               {IMAGE_RATIOS.map((r) => (
                 <button
                   key={r.value}
                   type="button"
                   onClick={() => setAspectRatio(r.value)}
-                  className={`px-2 py-0.5 rounded-xl text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
+                  className={`px-2 py-0.5 rounded-lg text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
                     aspectRatio === r.value
-                      ? 'bg-[#A855F7]/30 border-[#BF5AF2] text-white'
-                      : 'bg-black border-[#A855F7]/25 text-white/70 hover:text-white'
+                      ? 'bg-[#262626] border-neutral-400 text-white'
+                      : 'bg-[#0f0f0f] border-[#2a2a2a] text-neutral-400 hover:text-white'
                   }`}
                 >
                   {r.label}
                 </button>
               ))}
             </div>
-            <span className="text-[11px] text-[#BF5AF2]">
-              {imageGenMode === 'real-photo' ? 'Real Photo 📸' : 'AI Art 🎨'}
+            <span className="text-[11px] text-neutral-400">
+              {imageGenMode === 'real-photo' ? 'Real Photo' : 'AI Art'}
             </span>
           </div>
         </div>
       )}
 
-      {/* Compact Rounded Bottom Chat Box */}
-      <div className="rounded-3xl bg-[#0A0A0A] nova-glow-box px-2.5 py-1.5 sm:px-3 sm:py-2 transition-all">
+      {/* Flat Mature Bottom Chat Box */}
+      <div className="rounded-lg bg-[#171717] border border-[#2a2a2a] focus-within:border-neutral-500 px-2.5 py-2 sm:px-3 sm:py-2 transition-colors">
         {/* Attached Image Preview */}
         {attachedImage && (
-          <div className="mb-1.5 inline-flex items-center gap-2 rounded-xl bg-black border border-[#BF5AF2]/45 p-1.5 pe-2.5">
+          <div className="mb-1.5 inline-flex items-center gap-2 rounded-lg bg-[#0f0f0f] border border-[#2a2a2a] p-1.5 pe-2.5">
             <img
               src={attachedImage.previewUrl}
               alt={attachedImage.name}
@@ -2144,58 +1905,58 @@ export default function App() {
               type="button"
               onClick={() => setAttachedImage(null)}
               aria-label="Remove attachment"
-              className="p-1 rounded-lg text-white/65 hover:text-white cursor-pointer"
+              className="p-1 rounded-lg text-neutral-400 hover:text-white cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
-        {/* Quick Builder Action Strip + [ Real Photo 📸 ] [ AI Art 🎨 ] Switch inside Chat Input Area */}
-        <div className="flex items-center justify-between gap-2 pb-1.5 mb-1 border-b border-[#A855F7]/20 flex-wrap">
+        {/* Quick Builder Action Strip + Real Photo / AI Art Switch */}
+        <div className="flex items-center justify-between gap-2 pb-1.5 mb-1.5 border-b border-[#2a2a2a] flex-wrap">
           <div className="flex items-center gap-1.5 flex-wrap">
             <button
               type="button"
               onClick={() => void handleStartWebsiteBuilder()}
               disabled={isSending || isBuildingApp}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-medium bg-black hover:bg-[#A855F7]/20 border border-[#A855F7]/40 hover:border-[#BF5AF2] text-white transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-[#0f0f0f] hover:bg-[#212121] border border-[#2a2a2a] hover:border-neutral-500 text-neutral-200 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-50"
             >
-              <Globe className="w-3 h-3 text-[#BF5AF2] shrink-0" />
+              <Globe className="w-3 h-3 text-neutral-400 shrink-0" />
               <span>Build Website / App</span>
             </button>
 
             <div
               role="group"
               aria-label="Image generation mode"
-              className="inline-flex items-center gap-1 p-0.5 rounded-xl bg-black border border-[#A855F7]/35"
+              className="inline-flex items-center gap-1 p-0.5 rounded-lg bg-[#0f0f0f] border border-[#2a2a2a]"
             >
               <button
                 type="button"
                 onClick={() => handleChangeImageGenMode('real-photo')}
-                className={`px-2 py-0.5 rounded-lg text-[11px] font-medium transition-all cursor-pointer whitespace-nowrap border ${
+                className={`px-2.5 py-0.5 rounded-lg text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap border ${
                   imageGenMode === 'real-photo'
-                    ? 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] border-[#BF5AF2] text-white nova-btn-glow'
-                    : 'bg-transparent border-transparent text-white/70 hover:text-white'
+                    ? 'bg-[#262626] border-neutral-500 text-white'
+                    : 'bg-transparent border-transparent text-neutral-400 hover:text-white'
                 }`}
               >
-                Real Photo 📸
+                Real Photo
               </button>
               <button
                 type="button"
                 onClick={() => handleChangeImageGenMode('ai-art')}
-                className={`px-2 py-0.5 rounded-lg text-[11px] font-medium transition-all cursor-pointer whitespace-nowrap border ${
+                className={`px-2.5 py-0.5 rounded-lg text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap border ${
                   imageGenMode === 'ai-art'
-                    ? 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] border-[#BF5AF2] text-white nova-btn-glow'
-                    : 'bg-transparent border-transparent text-white/70 hover:text-white'
+                    ? 'bg-[#262626] border-neutral-500 text-white'
+                    : 'bg-transparent border-transparent text-neutral-400 hover:text-white'
                 }`}
               >
-                AI Art 🎨
+                AI Art
               </button>
             </div>
           </div>
 
           {voiceHint && (
-            <span className="text-[11px] text-white/70 truncate">{voiceHint}</span>
+            <span className="text-[11px] text-neutral-400 truncate">{voiceHint}</span>
           )}
         </div>
 
@@ -2213,9 +1974,9 @@ export default function App() {
             onClick={() => fileInputRef.current?.click()}
             title={t.uploadImage}
             aria-label={t.uploadImage}
-            className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-black border border-[#A855F7]/35 text-white hover:border-[#BF5AF2] transition-colors cursor-pointer shrink-0"
+            className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[#0f0f0f] border border-[#2a2a2a] text-neutral-300 hover:text-white hover:border-neutral-500 transition-colors cursor-pointer shrink-0"
           >
-            <Plus className="w-4 h-4 text-[#BF5AF2]" />
+            <Plus className="w-4 h-4" />
           </button>
 
           <textarea
@@ -2228,9 +1989,7 @@ export default function App() {
             }}
             onKeyDown={handleTextareaKeyDown}
             onFocus={() => {
-              setTimeout(() => {
-                messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-              }, 160);
+              messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
             }}
             placeholder={
               voiceHint
@@ -2241,7 +2000,7 @@ export default function App() {
                     ? t.imageInputPlaceholder
                     : t.inputPlaceholder
             }
-            className="flex-1 min-w-0 resize-none bg-transparent text-sm sm:text-[15px] text-white placeholder:text-white/45 focus:outline-none leading-5 py-2 px-1 max-h-28 overflow-y-auto"
+            className="flex-1 min-w-0 resize-none bg-transparent text-sm sm:text-[15px] text-white placeholder:text-neutral-500 focus:outline-none leading-5 py-2 px-1 max-h-28 overflow-y-auto"
           />
 
           {/* Image Button */}
@@ -2250,13 +2009,13 @@ export default function App() {
             onClick={() => setImageMode((v) => !v)}
             title={t.generateImage}
             aria-label={t.generateImage}
-            className={`inline-flex items-center justify-center gap-1 h-9 px-2.5 sm:px-3 rounded-full text-xs font-medium transition-all whitespace-nowrap shrink-0 cursor-pointer border ${
+            className={`inline-flex items-center justify-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
               imageMode
-                ? 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] border-[#BF5AF2] text-white nova-btn-glow'
-                : 'bg-black border-[#A855F7]/35 text-white hover:border-[#BF5AF2]'
+                ? 'bg-white border-white text-black'
+                : 'bg-[#0f0f0f] border-[#2a2a2a] text-neutral-200 hover:border-neutral-500'
             }`}
           >
-            <Sparkles className="w-3.5 h-3.5 text-[#BF5AF2] shrink-0" />
+            <ImageIcon className="w-3.5 h-3.5 shrink-0" />
             <span className="hidden sm:inline">{t.generateImage}</span>
           </button>
 
@@ -2267,28 +2026,28 @@ export default function App() {
             disabled={isTranscribing}
             title={isRecording ? t.stopDictation : t.dictate}
             aria-label={isRecording ? t.stopDictation : t.dictate}
-            className={`inline-flex items-center justify-center w-9 h-9 rounded-full transition-all shrink-0 cursor-pointer border ${
+            className={`inline-flex items-center justify-center w-9 h-9 rounded-lg transition-colors shrink-0 cursor-pointer border ${
               isRecording
-                ? 'bg-[#BF5AF2]/25 border-[#BF5AF2] text-white nova-active-glow'
-                : 'bg-black border-[#A855F7]/35 text-white hover:border-[#BF5AF2]'
+                ? 'bg-white border-white text-black'
+                : 'bg-[#0f0f0f] border-[#2a2a2a] text-neutral-300 hover:text-white hover:border-neutral-500'
             }`}
           >
             {isTranscribing ? (
-              <Loader2 className="w-4 h-4 animate-spin text-[#BF5AF2]" />
+              <Loader2 className="w-4 h-4 animate-spin" />
             ) : isRecording ? (
-              <Square className="w-3.5 h-3.5 fill-[#BF5AF2] text-[#BF5AF2]" />
+              <Square className="w-3.5 h-3.5 fill-current" />
             ) : (
-              <Mic className="w-4 h-4 text-[#BF5AF2]" />
+              <Mic className="w-4 h-4" />
             )}
           </button>
 
-          {/* Send Button: Neon Purple with Glow */}
+          {/* Send Button */}
           <button
             type="button"
             onClick={() => void sendPrompt(inputText)}
             disabled={!inputText.trim() || isSending}
             aria-label={t.send}
-            className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] disabled:bg-white/10 disabled:from-white/10 disabled:to-white/10 disabled:text-white/35 text-white nova-btn-glow disabled:shadow-none transition-all shrink-0 cursor-pointer"
+            className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-white hover:bg-neutral-200 disabled:bg-[#262626] disabled:text-neutral-500 text-black transition-colors shrink-0 cursor-pointer"
           >
             {isSending ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -2300,12 +2059,12 @@ export default function App() {
       </div>
 
       {/* Tiny Disclaimer below chat box */}
-      <p className="text-center text-[10px] text-white/50 leading-none">{t.disclaimer}</p>
+      <p className="text-center text-[10px] text-neutral-500 leading-none">{t.disclaimer}</p>
     </div>
   );
 
   const sidebarContent = (
-    <div className="flex flex-col h-full bg-[#0A0A0A]/92 backdrop-blur-md border-e border-[#A855F7]/35 w-[300px] sm:w-[340px] max-w-[88vw] shrink-0">
+    <div className="flex flex-col h-full bg-[#141414] border-e border-[#2a2a2a] w-[300px] sm:w-[340px] max-w-[88vw] shrink-0">
       {/* Top: Nova Logo + Collapse */}
       <div className="flex items-center justify-between gap-2 px-4 py-3.5 shrink-0">
         <button
@@ -2313,9 +2072,15 @@ export default function App() {
           onClick={handleNewChat}
           className="flex items-center gap-2.5 cursor-pointer"
         >
-          <NovaLogo size={30} glow={true} />
+          <NovaLogo size={30} glow={false} />
           <span className="text-lg font-semibold tracking-tight text-white">
-            {t.appName}
+            {t.appName === 'Nova' || t.appName === 'Nova™' ? (
+              <>
+                Nova<span className="trademark">™</span>
+              </>
+            ) : (
+              t.appName
+            )}
           </span>
         </button>
 
@@ -2326,20 +2091,20 @@ export default function App() {
             setMobileDrawerOpen(false);
           }}
           aria-label="Collapse sidebar"
-          className="p-2 rounded-xl text-white/65 hover:text-white hover:bg-black transition-colors cursor-pointer"
+          className="p-2 rounded-lg text-neutral-400 hover:text-white hover:bg-[#1f1f1f] transition-colors cursor-pointer"
         >
           <PanelLeftClose className="w-4 h-4 hidden md:block" />
           <X className="w-4 h-4 md:hidden" />
         </button>
       </div>
 
-      {/* Neon Purple New Chat + Big History Buttons */}
+      {/* New Chat + Big History Buttons */}
       <div className="px-3.5 pb-2.5 space-y-2 shrink-0">
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={handleNewChat}
-            className="flex-1 flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-2xl text-sm font-semibold bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] text-white nova-btn-glow transition-all whitespace-nowrap cursor-pointer"
+            className="flex-1 flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-lg text-sm font-semibold bg-white hover:bg-neutral-200 text-black transition-colors whitespace-nowrap cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>{t.newChat}</span>
@@ -2352,26 +2117,26 @@ export default function App() {
               setMobileDrawerOpen(false);
             }}
             title="Open Full History"
-            className={`inline-flex items-center gap-1.5 px-3 py-2.5 rounded-2xl text-xs font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-xs font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
               activeView === 'history'
-                ? 'bg-[#A855F7]/25 border-[#BF5AF2] text-white'
-                : 'bg-black border-[#A855F7]/35 text-white/85 hover:text-white hover:border-[#BF5AF2]'
+                ? 'bg-[#262626] border-neutral-400 text-white'
+                : 'bg-[#0f0f0f] border-[#2a2a2a] text-neutral-300 hover:text-white hover:border-neutral-500'
             }`}
           >
-            <History className="w-4 h-4 text-[#BF5AF2]" />
+            <History className="w-4 h-4 text-neutral-300" />
             <span>Big View</span>
           </button>
         </div>
 
         {/* Chats / Images History Tab Switcher */}
-        <div className="grid grid-cols-2 gap-1 p-1 rounded-2xl bg-black border border-[#A855F7]/30">
+        <div className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-[#0f0f0f] border border-[#2a2a2a]">
           <button
             type="button"
             onClick={() => setHistoryTab('chats')}
-            className={`py-1.5 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+            className={`py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
               historyTab === 'chats'
-                ? 'bg-[#A855F7]/25 border border-[#BF5AF2]/60 text-white'
-                : 'text-white/65 hover:text-white border border-transparent'
+                ? 'bg-[#262626] border border-[#3a3a3a] text-white'
+                : 'text-neutral-400 hover:text-white border border-transparent'
             }`}
           >
             {t.chatsTab} ({chats.length})
@@ -2379,10 +2144,10 @@ export default function App() {
           <button
             type="button"
             onClick={() => setHistoryTab('images')}
-            className={`py-1.5 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+            className={`py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
               historyTab === 'images'
-                ? 'bg-[#A855F7]/25 border border-[#BF5AF2]/60 text-white'
-                : 'text-white/65 hover:text-white border border-transparent'
+                ? 'bg-[#262626] border border-[#3a3a3a] text-white'
+                : 'text-neutral-400 hover:text-white border border-transparent'
             }`}
           >
             {t.imagesTab} ({allHistoryImages.length})
@@ -2391,23 +2156,23 @@ export default function App() {
 
         {historyTab === 'chats' && (
           <div className="relative">
-            <Search className="w-3.5 h-3.5 text-[#A855F7] absolute start-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <Search className="w-3.5 h-3.5 text-neutral-500 absolute start-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={t.searchHistory}
-              className="w-full rounded-2xl bg-black border border-[#A855F7]/30 ps-8 pe-3 py-2 text-xs text-white placeholder:text-white/45 focus:outline-none focus:border-[#BF5AF2]"
+              className="w-full rounded-lg bg-[#0f0f0f] border border-[#2a2a2a] ps-8 pe-3 py-2 text-xs text-white placeholder:text-neutral-500 focus:outline-none focus:border-neutral-400"
             />
           </div>
         )}
       </div>
 
       {/* Big Scrollable History List OR Saved Images Gallery */}
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-3 py-1.5 space-y-2">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-3 py-1.5 space-y-1.5">
         {historyTab === 'chats' ? (
           filteredChats.length === 0 ? (
-            <div className="px-3 py-6 text-sm text-white/55 leading-relaxed">
+            <div className="px-3 py-6 text-sm text-neutral-500 leading-relaxed">
               {t.historyEmpty}
             </div>
           ) : (
@@ -2430,16 +2195,16 @@ export default function App() {
                       setMobileDrawerOpen(false);
                     }
                   }}
-                  className={`group flex items-start justify-between gap-2.5 px-3.5 py-3 rounded-2xl transition-all cursor-pointer border ${
+                  className={`group flex items-start justify-between gap-2.5 px-3 py-2.5 rounded-lg transition-colors cursor-pointer border ${
                     isSelected
-                      ? 'bg-black text-white border-[#BF5AF2] nova-active-glow'
-                      : 'bg-black/50 text-white/85 hover:bg-black hover:text-white border-[#A855F7]/15 hover:border-[#A855F7]/45'
+                      ? 'bg-[#212121] text-white border-neutral-500'
+                      : 'bg-[#0f0f0f] text-neutral-300 hover:bg-[#1c1c1c] hover:text-white border-[#2a2a2a] hover:border-neutral-600'
                   }`}
                 >
                   <div className="flex items-start gap-2.5 min-w-0 flex-1">
                     <MessageSquare
                       className={`w-4 h-4 shrink-0 mt-0.5 ${
-                        isSelected ? 'text-[#BF5AF2]' : 'text-[#A855F7]/75'
+                        isSelected ? 'text-white' : 'text-neutral-500'
                       }`}
                     />
                     <div className="min-w-0 flex-1 space-y-0.5">
@@ -2447,7 +2212,7 @@ export default function App() {
                         {chat.title}
                       </div>
                       {chat.lastMessagePreview && (
-                        <div className="text-xs text-white/55 truncate">
+                        <div className="text-xs text-neutral-400 truncate">
                           {chat.lastMessagePreview}
                         </div>
                       )}
@@ -2457,7 +2222,7 @@ export default function App() {
                     type="button"
                     onClick={(e) => void handleDeleteChat(chat.id, e)}
                     aria-label={t.deleteChat}
-                    className="opacity-70 md:opacity-0 md:group-hover:opacity-100 p-1.5 rounded-lg text-white/55 hover:text-[#BF5AF2] transition-opacity shrink-0 cursor-pointer"
+                    className="opacity-70 md:opacity-0 md:group-hover:opacity-100 p-1.5 rounded-lg text-neutral-500 hover:text-white transition-opacity shrink-0 cursor-pointer"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -2468,16 +2233,16 @@ export default function App() {
         ) : (
           <div className="space-y-3 px-1 py-1">
             {/* Image Studio Quick Buttons under Sidebar Images */}
-            <div className="rounded-2xl bg-black border border-[#A855F7]/30 p-2 space-y-1.5">
+            <div className="rounded-lg bg-[#0f0f0f] border border-[#2a2a2a] p-2 space-y-1.5">
               <div className="flex items-center justify-between px-1">
-                <span className="text-[11px] font-semibold text-[#BF5AF2]">Image Studio</span>
+                <span className="text-[11px] font-semibold text-neutral-300">Image Studio</span>
                 <button
                   type="button"
                   onClick={() => {
                     setActiveView('images');
                     setMobileDrawerOpen(false);
                   }}
-                  className="text-[10px] text-white/70 hover:text-white cursor-pointer"
+                  className="text-[10px] text-neutral-400 hover:text-white cursor-pointer"
                 >
                   Open Studio
                 </button>
@@ -2492,10 +2257,10 @@ export default function App() {
                       setActiveView('images');
                       setMobileDrawerOpen(false);
                     }}
-                    className={`px-2 py-1.5 rounded-xl text-[11px] font-medium text-start truncate transition-colors cursor-pointer border ${
+                    className={`px-2 py-1.5 rounded-lg text-[11px] font-medium text-start truncate transition-colors cursor-pointer border ${
                       activeView === 'images' && studioMode === m
-                        ? 'bg-gradient-to-r from-[#A855F7] to-[#BF5AF2] border-[#BF5AF2] text-white'
-                        : 'bg-[#0A0A0A] border-[#A855F7]/25 text-white/80 hover:text-white hover:border-[#BF5AF2]'
+                        ? 'bg-white border-white text-black'
+                        : 'bg-[#171717] border-[#2a2a2a] text-neutral-300 hover:text-white hover:border-neutral-500'
                     }`}
                   >
                     {m}
@@ -2505,7 +2270,7 @@ export default function App() {
             </div>
 
             {allHistoryImages.length === 0 ? (
-              <div className="px-2 py-4 text-xs text-white/55 leading-relaxed">
+              <div className="px-2 py-4 text-xs text-neutral-500 leading-relaxed">
                 {t.imagesEmpty}
               </div>
             ) : (
@@ -2518,7 +2283,7 @@ export default function App() {
                       setActiveView('chat');
                       setMobileDrawerOpen(false);
                     }}
-                    className="relative group rounded-xl overflow-hidden border border-[#A855F7]/35 bg-black cursor-pointer aspect-square"
+                    className="relative group rounded-lg overflow-hidden border border-[#2a2a2a] bg-[#0f0f0f] cursor-pointer aspect-square"
                   >
                     <img
                       src={img.imageUrl}
@@ -2530,10 +2295,10 @@ export default function App() {
                       href={img.imageUrl}
                       download={`nova-${img.id.slice(0, 6)}.png`}
                       onClick={(e) => e.stopPropagation()}
-                      className="opacity-0 group-hover:opacity-100 absolute bottom-1.5 end-1.5 p-1.5 rounded-lg bg-black/85 border border-[#BF5AF2]/50 text-white transition-opacity"
+                      className="opacity-0 group-hover:opacity-100 absolute bottom-1.5 end-1.5 p-1.5 rounded-lg bg-[#0f0f0f]/90 border border-[#2a2a2a] text-white transition-opacity"
                       aria-label={t.downloadImage}
                     >
-                      <Download className="w-3 h-3 text-[#BF5AF2]" />
+                      <Download className="w-3 h-3 text-neutral-200" />
                     </a>
                   </div>
                 ))}
@@ -2543,25 +2308,22 @@ export default function App() {
         )}
       </div>
 
-      {/* Core Features Nav: Ekere Wallpaper & Settings */}
-      <div className="px-3.5 py-2 border-t border-[#A855F7]/25 grid grid-cols-2 gap-1.5">
+      {/* Core Features Nav: Wallpapers & Settings */}
+      <div className="px-3.5 py-2 border-t border-[#2a2a2a] grid grid-cols-2 gap-1.5">
         <button
           type="button"
           onClick={() => {
             setActiveView('wallpaper');
             setMobileDrawerOpen(false);
-            if (!wallpaperState.currentImageUrl && !isGeneratingWallpaper) {
-              void handleGenerateWallpaper(wallpaperState.style);
-            }
           }}
-          className={`flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-2xl text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap ${
+          className={`flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap ${
             activeView === 'wallpaper'
-              ? 'bg-black border-[#BF5AF2] text-white nova-active-glow'
-              : 'bg-black border-[#A855F7]/25 text-white/80 hover:text-white hover:border-[#BF5AF2]'
+              ? 'bg-[#262626] border-neutral-400 text-white'
+              : 'bg-[#0f0f0f] border-[#2a2a2a] text-neutral-300 hover:text-white hover:border-neutral-500'
           }`}
         >
-          <Wallpaper className="w-3.5 h-3.5 text-[#BF5AF2] shrink-0" />
-          <span className="truncate">Ekere Wallpaper</span>
+          <Wallpaper className="w-3.5 h-3.5 text-neutral-300 shrink-0" />
+          <span className="truncate">Wallpapers</span>
         </button>
 
         <button
@@ -2570,15 +2332,15 @@ export default function App() {
             setSettingsModalOpen(true);
             setMobileDrawerOpen(false);
           }}
-          className="flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-2xl text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap bg-black border-[#A855F7]/25 text-white/80 hover:text-white hover:border-[#BF5AF2]"
+          className="flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap bg-[#0f0f0f] border-[#2a2a2a] text-neutral-300 hover:text-white hover:border-neutral-500"
         >
-          <Settings className="w-3.5 h-3.5 text-[#BF5AF2] shrink-0" />
+          <Settings className="w-3.5 h-3.5 text-neutral-300 shrink-0" />
           <span>{t.settings}</span>
         </button>
       </div>
 
       {/* Bottom: User Profile + Sign Out */}
-      <div className="p-3.5 border-t border-[#A855F7]/25 space-y-2">
+      <div className="p-3.5 border-t border-[#2a2a2a] space-y-2">
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -2586,34 +2348,32 @@ export default function App() {
               setActiveView('profile');
               setMobileDrawerOpen(false);
             }}
-            className={`flex-1 flex items-center gap-2.5 px-2.5 py-2 rounded-2xl border transition-colors min-w-0 cursor-pointer ${
+            className={`flex-1 flex items-center gap-2.5 px-2.5 py-2 rounded-lg border transition-colors min-w-0 cursor-pointer ${
               activeView === 'profile'
-                ? 'bg-black border-[#BF5AF2] text-white nova-active-glow'
-                : 'bg-black border-[#A855F7]/25 text-white hover:border-[#BF5AF2]'
+                ? 'bg-[#262626] border-neutral-400 text-white'
+                : 'bg-[#0f0f0f] border-[#2a2a2a] text-white hover:border-neutral-500'
             }`}
           >
-            {(authUser?.photoURL || profile.photoURL) ? (
+            {profile.photoURL ? (
               <img
-                src={authUser?.photoURL || profile.photoURL}
-                alt={authUser?.displayName || profile.displayName}
+                src={profile.photoURL}
+                alt={profile.displayName}
                 referrerPolicy="no-referrer"
-                className="w-8 h-8 rounded-xl object-cover shrink-0"
+                className="w-8 h-8 rounded-lg object-cover shrink-0"
               />
             ) : (
-              <div className="w-8 h-8 rounded-xl bg-[#A855F7]/20 border border-[#BF5AF2]/40 flex items-center justify-center shrink-0">
-                <UserIcon className="w-4 h-4 text-[#BF5AF2]" />
+              <div className="w-8 h-8 rounded-lg bg-[#212121] border border-[#2a2a2a] flex items-center justify-center shrink-0">
+                <UserIcon className="w-4 h-4 text-neutral-300" />
               </div>
             )}
             <div className="min-w-0 text-start">
               <div className="text-xs font-semibold text-white truncate">
-                {authUser
-                  ? authUser.displayName || profile.displayName || authUser.email?.split('@')[0] || 'Nova User'
+                {currentUserEmail
+                  ? profile.displayName || currentUserEmail.split('@')[0] || 'Nova User'
                   : 'Guest'}
               </div>
-              <div className="text-[11px] text-white/60 truncate">
-                {authUser
-                  ? authUser.email || profile.email || 'Google Account'
-                  : 'Guest mode'}
+              <div className="text-[11px] text-neutral-400 truncate">
+                {currentUserEmail || 'Guest mode'}
               </div>
             </div>
           </button>
@@ -2623,60 +2383,41 @@ export default function App() {
             onClick={() => setSettingsModalOpen(true)}
             aria-label={t.settings}
             title={t.settings}
-            className="p-2.5 rounded-2xl bg-black border border-[#A855F7]/30 text-white/80 hover:text-white hover:border-[#BF5AF2] transition-colors shrink-0 cursor-pointer"
+            className="p-2.5 rounded-lg bg-[#0f0f0f] border border-[#2a2a2a] text-neutral-300 hover:text-white hover:border-neutral-500 transition-colors shrink-0 cursor-pointer"
           >
-            <Settings className="w-4 h-4 text-[#BF5AF2]" />
+            <Settings className="w-4 h-4" />
           </button>
         </div>
 
         <div className="flex items-center gap-2">
-          {!authUser && (
+          {!currentUserEmail && (
             <button
               type="button"
-              onClick={handleSignInGoogle}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-2xl text-xs font-medium bg-black hover:border-[#BF5AF2] border border-[#A855F7]/30 text-white transition-colors cursor-pointer whitespace-nowrap"
+              onClick={handleOpenLogin}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-medium bg-[#0f0f0f] hover:border-neutral-500 border border-[#2a2a2a] text-white transition-colors cursor-pointer whitespace-nowrap"
             >
-              <LogIn className="w-3.5 h-3.5 text-[#BF5AF2]" />
-              <span>Google Sign In</span>
+              <LogIn className="w-3.5 h-3.5 text-neutral-300" />
+              <span>Sign In</span>
             </button>
           )}
           <button
             type="button"
             onClick={() => void handleSignOut()}
-            className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-2xl text-xs font-medium bg-black hover:border-[#BF5AF2] border border-[#A855F7]/30 text-white/80 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
+            className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-medium bg-[#0f0f0f] hover:border-neutral-500 border border-[#2a2a2a] text-neutral-300 hover:text-white transition-colors cursor-pointer whitespace-nowrap"
           >
-            <LogOut className="w-3.5 h-3.5 text-[#BF5AF2]" />
-            <span>{authUser ? t.signOut : 'Exit Guest'}</span>
+            <LogOut className="w-3.5 h-3.5 text-neutral-300" />
+            <span>{currentUserEmail ? t.signOut : 'Exit Guest'}</span>
           </button>
         </div>
       </div>
     </div>
   );
 
-  if (!authReady) {
-    return (
-      <div className="min-h-[100dvh] w-full bg-black text-white flex flex-col items-center justify-center gap-5">
-        <div className="relative flex items-center justify-center w-28 h-28">
-          <div className="absolute inset-0 rounded-full bg-[#BF5AF2]/35 blur-2xl animate-pulse" />
-          <div
-            className="relative w-20 h-20 rounded-full border border-[#BF5AF2]/75 shadow-[0_0_52px_rgba(191,90,242,0.85)] flex items-center justify-center"
-            style={{
-              background:
-                'radial-gradient(circle at 35% 30%, #FFFFFF 0%, #E9D5FF 24%, #BF5AF2 58%, #A855F7 84%, #000000 100%)',
-            }}
-          >
-            <NovaLogo size={28} glow={false} />
-          </div>
-        </div>
-        <p className="text-xs text-white/80 tracking-wide">Starting Nova...</p>
-      </div>
-    );
-  }
-
-  if (!authUser && !guestSessionActive) {
+  if (!currentUserEmail && !guestSessionActive) {
     return (
       <LoginScreen
-        onGoogleLogin={handleSignInGoogle}
+        onSignIn={handleLocalSignIn}
+        onSignUp={handleLocalSignUp}
         onContinueAsGuest={handleContinueAsGuest}
         authError={authError}
       />
@@ -2684,17 +2425,17 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-[100dvh] w-full bg-black text-white overflow-hidden relative">
+    <div className="home-screen flex h-[100dvh] w-full bg-[#0f0f0f] text-white overflow-hidden relative">
       {wallpaperState.appliedAsBackground && wallpaperState.currentImageUrl ? (
         <img
           src={wallpaperState.currentImageUrl}
           alt=""
           aria-hidden="true"
           referrerPolicy="no-referrer"
-          className="fixed inset-0 w-full h-full object-cover opacity-25 pointer-events-none z-0"
+          className="fixed inset-0 w-full h-full object-cover opacity-20 pointer-events-none z-0"
         />
       ) : (
-        <RotatingEarthWallpaper />
+        <RotatingEarthWallpaper themeMode={themeMode} earthEnabled={earthEnabled} />
       )}
 
       {/* Desktop Sidebar */}
@@ -2704,7 +2445,7 @@ export default function App() {
       {mobileDrawerOpen && (
         <div className="fixed inset-0 z-40 flex md:hidden">
           <div
-            className="fixed inset-0 bg-black/80 backdrop-blur-sm"
+            className="fixed inset-0 bg-black/80"
             onClick={() => setMobileDrawerOpen(false)}
           />
           <aside className="relative z-50 flex h-full min-h-0">{sidebarContent}</aside>
@@ -2715,18 +2456,18 @@ export default function App() {
       <div
         className={`flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden relative z-10 ${
           wallpaperState.appliedAsBackground && wallpaperState.currentImageUrl
-            ? 'bg-black/75'
-            : 'bg-black/35'
+            ? 'bg-[#0f0f0f]/80'
+            : 'bg-transparent'
         }`}
       >
-        {/* Top Bar: Left = Nova name + Glowing Logo + Connection Dot | Right = Settings + Menu */}
-        <header className="flex items-center justify-between gap-4 px-4 sm:px-6 py-3.5 border-b border-[#A855F7]/30 bg-black/65 backdrop-blur-md shrink-0">
-          <div className="flex items-center gap-2.5 min-w-0">
+        {/* Top Bar */}
+        <header className="top-bar border-b border-[#2a2a2a] bg-[#0f0f0f] shrink-0">
+          <div className="flex items-center gap-2 min-w-0 shrink-0">
             <button
               type="button"
               onClick={() => setMobileDrawerOpen(true)}
               aria-label="Open menu"
-              className="p-2 rounded-xl text-white/80 hover:text-white hover:bg-[#0A0A0A] md:hidden cursor-pointer shrink-0"
+              className="p-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-[#171717] md:hidden cursor-pointer shrink-0"
             >
               <Menu className="w-5 h-5" />
             </button>
@@ -2736,7 +2477,7 @@ export default function App() {
                 type="button"
                 onClick={() => setSidebarOpen(true)}
                 aria-label="Expand sidebar"
-                className="hidden md:inline-flex p-2 rounded-xl text-white/80 hover:text-white hover:bg-[#0A0A0A] cursor-pointer shrink-0"
+                className="hidden md:inline-flex p-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-[#171717] cursor-pointer shrink-0"
               >
                 <PanelLeftOpen className="w-4 h-4" />
               </button>
@@ -2745,34 +2486,63 @@ export default function App() {
             <button
               type="button"
               onClick={handleNewChat}
-              className="flex items-center gap-2 cursor-pointer shrink-0"
+              className="logo flex items-center gap-2 cursor-pointer shrink-0"
             >
-              <NovaLogo size={26} glow={true} />
-              <span className="text-base font-semibold text-white whitespace-nowrap">
-                {t.appName}
+              <NovaLogo size={24} glow={false} />
+              <span className="font-semibold text-white whitespace-nowrap">
+                {t.appName === 'Nova' || t.appName === 'Nova™' ? (
+                  <>
+                    Nova<span className="trademark">™</span>
+                  </>
+                ) : (
+                  t.appName
+                )}
               </span>
-              <span
-                title="Nova Online · Free Keyless AI"
-                aria-label="Nova Online"
-                className="w-2 h-2 rounded-full shrink-0 bg-emerald-500 shadow-[0_0_8px_rgba(34,197,94,0.85)]"
-              />
             </button>
           </div>
 
-          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          <div className="top-actions">
+            <button
+              type="button"
+              onClick={() => handleToggleInstantMode(!instantMode)}
+              title="Toggle Instant Mode speed"
+              className={`hidden lg:inline-flex items-center gap-1.5 rounded-lg font-medium border transition-colors cursor-pointer ${
+                instantMode
+                  ? 'bg-[#262626] border-neutral-400 text-white'
+                  : 'bg-[#171717] border-[#2a2a2a] text-neutral-300 hover:text-white hover:border-neutral-500'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5 text-neutral-300" />
+              <span className="hidden xl:inline">Instant Mode - {instantMode ? 'ON' : 'OFF'}</span>
+              <span className="xl:hidden">Instant {instantMode ? 'ON' : 'OFF'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveView((v) => (v === 'wallpaper' ? 'chat' : 'wallpaper'))}
+              className={`inline-flex items-center gap-1.5 rounded-lg font-medium border transition-colors cursor-pointer ${
+                activeView === 'wallpaper'
+                  ? 'bg-[#262626] border-neutral-400 text-white'
+                  : 'bg-[#171717] border-[#2a2a2a] text-neutral-200 hover:border-neutral-500'
+              }`}
+            >
+              <Wallpaper className="w-3.5 h-3.5 text-neutral-300" />
+              <span className="hidden sm:inline">Wallpapers</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setActiveView((v) => (v === 'history' ? 'chat' : 'history'))}
-              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-medium border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 rounded-lg font-medium border transition-colors cursor-pointer ${
                 activeView === 'history'
-                  ? 'bg-[#A855F7]/25 border-[#BF5AF2] text-white'
-                  : 'bg-[#0A0A0A] border-[#A855F7]/40 text-white hover:border-[#BF5AF2]'
+                  ? 'bg-[#262626] border-neutral-400 text-white'
+                  : 'bg-[#171717] border-[#2a2a2a] text-neutral-200 hover:border-neutral-500'
               }`}
             >
-              <History className="w-3.5 h-3.5 text-[#BF5AF2]" />
-              <span>History</span>
+              <History className="w-3.5 h-3.5 text-neutral-300" />
+              <span className="hidden sm:inline">History</span>
               {chats.length > 0 && (
-                <span className="px-1.5 py-0.5 rounded-md bg-[#A855F7]/25 text-[10px] font-mono tabular-nums text-white">
+                <span className="px-1.5 py-0.5 rounded-md bg-[#262626] text-[10px] font-mono tabular-nums text-neutral-200">
                   {chats.length}
                 </span>
               )}
@@ -2781,10 +2551,11 @@ export default function App() {
             <button
               type="button"
               onClick={() => setSettingsModalOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-medium bg-[#0A0A0A] border border-[#A855F7]/40 text-white hover:border-[#BF5AF2] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              aria-label={t.settings}
+              className="inline-flex items-center gap-1.5 rounded-lg font-medium bg-[#171717] border border-[#2a2a2a] text-neutral-200 hover:border-neutral-500 transition-colors cursor-pointer"
             >
-              <Settings className="w-3.5 h-3.5 text-[#BF5AF2]" />
-              <span className="hidden sm:inline">{t.settings}</span>
+              <Settings className="w-3.5 h-3.5 text-neutral-300" />
+              <span className="hidden md:inline">{t.settings}</span>
             </button>
 
             <button
@@ -2792,25 +2563,25 @@ export default function App() {
               onClick={() => setRightMenuOpen(true)}
               aria-label="Open Nova menu"
               title="Open Nova menu"
-              className="inline-flex items-center justify-center w-9 h-9 rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/35 text-white hover:border-[#BF5AF2] transition-colors shrink-0 cursor-pointer"
+              className="inline-flex items-center justify-center rounded-lg bg-[#171717] border border-[#2a2a2a] text-neutral-200 hover:border-neutral-500 transition-colors cursor-pointer"
             >
               <Menu className="w-4 h-4" />
             </button>
           </div>
         </header>
 
-        {/* Welcome Toast after Google/Email Login */}
+        {/* Welcome Toast after Local Login */}
         {welcomeBanner && (
           <div className="mx-auto mt-2 px-4 w-full max-w-[800px] shrink-0">
-            <div className="flex items-center justify-between gap-3 rounded-2xl bg-[#0A0A0A] border border-[#BF5AF2]/60 nova-glow-box px-4 py-2 text-xs text-white">
+            <div className="flex items-center justify-between gap-3 rounded-lg bg-[#171717] border border-[#2a2a2a] px-4 py-2 text-xs text-white">
               <div className="flex items-center gap-2">
-                <Check className="w-4 h-4 text-[#BF5AF2] shrink-0" />
+                <Check className="w-4 h-4 text-white shrink-0" />
                 <span className="font-medium">{welcomeBanner}</span>
               </div>
               <button
                 type="button"
                 onClick={() => setWelcomeBanner(null)}
-                className="p-1 text-white/70 hover:text-white cursor-pointer"
+                className="p-1 text-neutral-400 hover:text-white cursor-pointer"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -2821,10 +2592,12 @@ export default function App() {
         {/* Active View: Profile/Account, Ekere Wallpaper, Images Studio, Big History, OR Chat/Build */}
         {activeView === 'profile' ? (
           <UserProfileView
-            isSignedIn={Boolean(authUser)}
+            isSignedIn={Boolean(currentUserEmail)}
             profile={profile}
+            premiumStatus={premiumStatus}
+            onOpenPremiumModal={() => setPremiumModalOpen(true)}
             onBackToChat={() => setActiveView('chat')}
-            onSignInGoogle={handleSignInGoogle}
+            onOpenLogin={handleOpenLogin}
             onSignOut={handleSignOut}
             onChangeLanguage={(lang) => updateUserPreferences({ language: lang })}
             onChangeVoice={(voice) => updateUserPreferences({ voiceName: voice })}
@@ -2848,10 +2621,26 @@ export default function App() {
         ) : activeView === 'wallpaper' ? (
           <WallpaperView
             state={wallpaperState}
+            premiumStatus={premiumStatus}
+            themeMode={themeMode}
+            earthEnabled={earthEnabled}
+            onSelectThemeMode={handleSelectThemeMode}
+            onToggleEarth={handleToggleEarth}
+            onPremiumStatusUpdated={handlePremiumStatusUpdated}
             onUpdateState={updateWallpaperState}
-            onGenerateWallpaper={handleGenerateWallpaper}
-            isGenerating={isGeneratingWallpaper}
-            errorMessage={wallpaperError}
+            onSaveToGallery={(prompt, imageUrl) => {
+              const entry: SavedImageEntry = {
+                id: createId('img'),
+                chatId: activeChatId || 'wallpapers',
+                prompt,
+                imageUrl,
+                createdAtMs: Date.now(),
+              };
+              setSavedImages((prev) => [
+                entry,
+                ...prev.filter((i) => i.imageUrl !== imageUrl).slice(0, 29),
+              ]);
+            }}
             onBackToChat={() => setActiveView('chat')}
           />
         ) : activeView === 'images' ? (
@@ -2875,21 +2664,27 @@ export default function App() {
         ) : (
           /* 3-Section Chat Layout: Header top (above) -> Tall Full-Width Scrollable Middle -> Fixed Compact Bottom Input */
           <>
-            <main className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-3 sm:px-6 py-4">
+            <main className="chat-content flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-3 sm:px-6 pt-4">
               {activeMessages.length === 0 && !isSending ? (
-                <div className="min-h-full flex flex-col items-center justify-center pb-8">
-                  <div className="w-full max-w-4xl flex flex-col items-center text-center space-y-6">
-                    <div className="space-y-3 flex flex-col items-center">
-                      <NovaLogo size={54} glow={true} />
+                <div className="min-h-full flex flex-col items-center justify-center pb-14">
+                  <div className="w-full max-w-4xl flex flex-col items-center text-center space-y-5">
+                    <div className="space-y-2.5 flex flex-col items-center">
+                      <NovaLogo size={44} glow={false} />
                       <h1
                         className="text-2xl sm:text-4xl font-semibold text-white tracking-tight max-w-xl"
                         style={{ textWrap: 'balance' }}
                       >
-                        {memory.name
-                          ? `Hey ${memory.name}! What are we creating today?`
-                          : t.heroTitle}
+                        {memory.name ? (
+                          <>
+                            Hi {memory.name}! I&apos;m Nova<span className="trademark">™</span>
+                          </>
+                        ) : (
+                          <>
+                            Hi, I&apos;m Nova<span className="trademark">™</span>
+                          </>
+                        )}
                       </h1>
-                      <p className="text-sm sm:text-base text-white/65 max-w-lg">
+                      <p className="text-sm sm:text-base text-neutral-400 max-w-lg">
                         {t.heroSubtitle}
                       </p>
                     </div>
@@ -2900,17 +2695,17 @@ export default function App() {
                           key={idx}
                           type="button"
                           onClick={() => void sendPrompt(card.prompt, card.isImage)}
-                          className="group rounded-2xl bg-[#0A0A0A] border border-[#A855F7]/30 hover:border-[#BF5AF2] hover:shadow-[0_0_24px_-10px_rgba(191,90,242,0.55)] px-4 py-3.5 text-start transition-all cursor-pointer"
+                          className="group rounded-lg bg-[#171717] border border-[#2a2a2a] hover:border-neutral-500 hover:bg-[#1f1f1f] px-4 py-3.5 text-start transition-colors cursor-pointer"
                         >
                           <div className="flex items-center justify-between gap-2">
                             <span className="text-sm font-medium text-white">
                               {card.title}
                             </span>
                             {card.isImage && (
-                              <ImageIcon className="w-3.5 h-3.5 text-[#BF5AF2] shrink-0" />
+                              <ImageIcon className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
                             )}
                           </div>
-                          <p className="text-xs text-white/60 mt-1 line-clamp-1">
+                          <p className="text-xs text-neutral-400 mt-1 line-clamp-1">
                             {card.prompt}
                           </p>
                         </button>
@@ -2919,7 +2714,7 @@ export default function App() {
                   </div>
                 </div>
               ) : (
-                <div className="w-full max-w-5xl mx-auto space-y-5 pb-20 sm:pb-14">
+                <div className="w-full max-w-5xl mx-auto space-y-5 pb-16">
                   {activeMessages.map((msg) => (
                     <ChatMessageItem
                       key={msg.id}
@@ -2969,8 +2764,13 @@ export default function App() {
               )}
             </main>
 
-            <footer className="shrink-0 border-t border-[#A855F7]/25 bg-black/65 backdrop-blur-md px-3 sm:px-6 pt-2 pb-2.5 z-20">
-              {renderComposer()}
+            <footer className="chat-input-bar border-t border-[#2a2a2a]">
+              <div className={sidebarOpen ? 'md:ps-[300px] sm:md:ps-[340px]' : ''}>
+                {renderComposer()}
+                <div className="text-center text-[10px] text-neutral-500 pt-1">
+                  © Nova<span className="trademark">™</span> - All Rights Reserved
+                </div>
+              </div>
             </footer>
           </>
         )}
@@ -2982,13 +2782,29 @@ export default function App() {
         onClose={() => setSettingsModalOpen(false)}
         profile={profile}
         voiceSpeed={voiceSpeed}
+        instantMode={instantMode}
+        isMuted={isMuted}
+        themeMode={themeMode}
+        earthEnabled={earthEnabled}
         memory={memory}
         onChangeLanguage={(lang) => updateUserPreferences({ language: lang })}
         onChangeVoice={(voice) => updateUserPreferences({ voiceName: voice })}
         onChangeVoiceSpeed={handleChangeVoiceSpeed}
+        onToggleInstantMode={handleToggleInstantMode}
+        onToggleMute={toggleMute}
+        onSelectThemeMode={handleSelectThemeMode}
+        onToggleEarth={handleToggleEarth}
         onUpdateMemory={handleUpdateMemory}
         onClearMemory={handleClearMemory}
         t={t}
+      />
+
+      {/* Premium Unlock Modal */}
+      <PremiumModal
+        isOpen={premiumModalOpen}
+        onClose={() => setPremiumModalOpen(false)}
+        premiumStatus={premiumStatus}
+        onStatusUpdated={handlePremiumStatusUpdated}
       />
 
       {/* Right Navigation Drawer */}
@@ -2998,9 +2814,6 @@ export default function App() {
         activeView={activeView}
         onSelectView={(view) => {
           setActiveView(view);
-          if (view === 'wallpaper' && !wallpaperState.currentImageUrl && !isGeneratingWallpaper) {
-            void handleGenerateWallpaper(wallpaperState.style);
-          }
         }}
         onOpenSettings={() => setSettingsModalOpen(true)}
         chats={chats}

@@ -107,7 +107,7 @@ export interface TranslationStrings {
 
 export const TRANSLATIONS: Record<LanguageCode, TranslationStrings> = {
   en: {
-    appName: 'Nova',
+    appName: 'Nova™',
     newChat: 'New Chat',
     searchHistory: 'Search chats...',
     historyEmpty: 'Your conversations will appear here.',
@@ -123,7 +123,7 @@ export const TRANSLATIONS: Record<LanguageCode, TranslationStrings> = {
     chatsLeftToday: 'left today',
     upgradeToPremium: 'Upgrade to Premium',
     upgradeShort: 'Upgrade',
-    heroTitle: 'What can Nova help you create today?',
+    heroTitle: "Hi, I'm Nova™",
     heroSubtitle: 'Ask anything in any language, speak live with voice, or generate images.',
     inputPlaceholder: 'Ask Nova anything...',
     imageInputPlaceholder: 'Describe the image you want Nova to create...',
@@ -208,7 +208,7 @@ export const TRANSLATIONS: Record<LanguageCode, TranslationStrings> = {
     voiceShort: 'Voice',
   },
   es: {
-    appName: 'Nova',
+    appName: 'Nova™',
     newChat: 'Nuevo chat',
     searchHistory: 'Buscar chats...',
     historyEmpty: 'Tus conversaciones aparecerán aquí.',
@@ -309,7 +309,7 @@ export const TRANSLATIONS: Record<LanguageCode, TranslationStrings> = {
     voiceShort: 'Voz',
   },
   fr: {
-    appName: 'Nova',
+    appName: 'Nova™',
     newChat: 'Nouveau chat',
     searchHistory: 'Rechercher...',
     historyEmpty: 'Vos conversations apparaîtront ici.',
@@ -410,7 +410,7 @@ export const TRANSLATIONS: Record<LanguageCode, TranslationStrings> = {
     voiceShort: 'Voix',
   },
   pt: {
-    appName: 'Nova',
+    appName: 'Nova™',
     newChat: 'Novo chat',
     searchHistory: 'Buscar conversas...',
     historyEmpty: 'Suas conversas aparecerão aqui.',
@@ -612,7 +612,7 @@ export const TRANSLATIONS: Record<LanguageCode, TranslationStrings> = {
     voiceShort: 'صوت',
   },
   hi: {
-    appName: 'Nova',
+    appName: 'Nova™',
     newChat: 'नई चैट',
     searchHistory: 'चैट खोजें...',
     historyEmpty: 'आपकी बातचीत यहाँ दिखाई देगी।',
@@ -713,7 +713,7 @@ export const TRANSLATIONS: Record<LanguageCode, TranslationStrings> = {
     voiceShort: 'वॉइस',
   },
   zh: {
-    appName: 'Nova',
+    appName: 'Nova™',
     newChat: '新对话',
     searchHistory: '搜索对话...',
     historyEmpty: '你的对话记录将显示在这里。',

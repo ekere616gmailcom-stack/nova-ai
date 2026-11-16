@@ -1,112 +1,172 @@
 import React, { useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Eye, EyeOff, Lock, LogIn, Mail, UserPlus } from 'lucide-react';
 import { NovaLogo } from './NovaLogo';
+import { LocalAuthResult } from '../utils/localAuth';
 
 interface LoginScreenProps {
-  onGoogleLogin: () => Promise<void>;
+  onSignIn: (email: string, password: string) => LocalAuthResult;
+  onSignUp: (email: string, password: string) => LocalAuthResult;
   onContinueAsGuest: () => void;
   authError: string | null;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({
-  onGoogleLogin,
+  onSignIn,
+  onSignUp,
   onContinueAsGuest,
   authError,
 }) => {
-  const [googleLoading, setGoogleLoading] = useState(false);
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [localFeedback, setLocalFeedback] = useState<string | null>(null);
 
-  const handleGoogleClick = async () => {
-    setGoogleLoading(true);
-    try {
-      await onGoogleLogin();
-    } finally {
-      setGoogleLoading(false);
+  const displayError = localFeedback || authError;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLocalFeedback(null);
+
+    const result =
+      mode === 'signup' ? onSignUp(email, password) : onSignIn(email, password);
+
+    if (!result.ok) {
+      setLocalFeedback(result.message);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 min-h-[100dvh] w-full bg-black text-white overflow-y-auto flex flex-col items-center justify-between px-6 py-8">
-      {/* Subtle Neon Purple Ambient Glow */}
-      <div
-        className="pointer-events-none fixed inset-0 opacity-50"
-        style={{
-          background:
-            'radial-gradient(circle at 50% 30%, rgba(191, 90, 242, 0.25), transparent 52%), radial-gradient(circle at 50% 82%, rgba(168, 85, 247, 0.14), transparent 55%)',
-        }}
-      />
-
-      <div className="relative z-10 flex-1 w-full max-w-sm flex flex-col items-center justify-center text-center space-y-8 py-4">
-        {/* Big Glowing Neon Purple & White Nova Orb */}
-        <div className="relative flex items-center justify-center w-44 h-44">
-          <div className="absolute inset-0 rounded-full bg-[#BF5AF2]/35 blur-3xl animate-pulse" />
-          <div
-            className="relative w-36 h-36 rounded-full border border-[#BF5AF2]/85 shadow-[0_0_80px_rgba(191,90,242,0.85),inset_0_0_32px_rgba(255,255,255,0.85)] flex items-center justify-center"
-            style={{
-              background:
-                'radial-gradient(circle at 35% 30%, #FFFFFF 0%, #F3E8FF 24%, #BF5AF2 58%, #A855F7 84%, #0A0A0A 100%)',
-            }}
-          >
-            <NovaLogo size={46} glow={true} />
-          </div>
-        </div>
+    <div className="fixed inset-0 z-50 min-h-[100dvh] w-full bg-[#0f0f0f] text-white overflow-y-auto flex flex-col items-center justify-between px-6 py-8">
+      <div className="relative z-10 flex-1 w-full max-w-sm flex flex-col items-center justify-center text-center space-y-6 py-4">
+        <NovaLogo size={44} />
 
         {/* Title */}
-        <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight text-white">
-          Welcome to Nova
-        </h1>
+        <div className="space-y-1.5">
+          <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-white">
+            Welcome to Nova<span className="trademark">™</span>
+          </h1>
+          <p className="text-xs text-neutral-400">
+            Sign in or create an account to continue
+          </p>
+        </div>
 
-        {authError && (
-          <div className="w-full rounded-2xl bg-[#0A0A0A] border border-[#BF5AF2]/60 px-4 py-2.5 text-xs text-white">
-            {authError}
+        {/* Sign In / Sign Up Mode Tabs */}
+        <div className="w-full grid grid-cols-2 gap-1 p-1 rounded-lg bg-[#171717] border border-[#2a2a2a]">
+          <button
+            type="button"
+            onClick={() => {
+              setMode('signin');
+              setLocalFeedback(null);
+            }}
+            className={`inline-flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+              mode === 'signin'
+                ? 'bg-white text-black'
+                : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            <LogIn className="w-3.5 h-3.5" />
+            <span>Sign In</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setMode('signup');
+              setLocalFeedback(null);
+            }}
+            className={`inline-flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+              mode === 'signup'
+                ? 'bg-white text-black'
+                : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            <UserPlus className="w-3.5 h-3.5" />
+            <span>Sign Up</span>
+          </button>
+        </div>
+
+        {displayError && (
+          <div
+            role="alert"
+            className="w-full rounded-lg bg-[#171717] border border-neutral-600 px-4 py-2.5 text-xs text-neutral-100 text-start"
+          >
+            {displayError}
           </div>
         )}
 
-        {/* Primary Big White Google Button + Small Continue as Guest Link */}
-        <div className="w-full flex flex-col items-center space-y-4">
-          <button
-            type="button"
-            onClick={() => void handleGoogleClick()}
-            disabled={googleLoading}
-            className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-2xl bg-white hover:bg-white/90 text-black font-semibold text-base shadow-[0_0_34px_-6px_rgba(191,90,242,0.65)] transition-all cursor-pointer disabled:opacity-60"
-          >
-            {googleLoading ? (
-              <Loader2 className="w-5 h-5 animate-spin text-black" />
-            ) : (
-              <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  fill="#000000"
-                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
-                />
-                <path
-                  fill="#A855F7"
-                  d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
-                />
-                <path
-                  fill="#BF5AF2"
-                  d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
-                />
-                <path
-                  fill="#000000"
-                  d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
-                />
-              </svg>
-            )}
-            <span>Continue with Google</span>
-          </button>
+        {/* Email & Password Form */}
+        <form onSubmit={handleSubmit} className="w-full space-y-3.5 text-start">
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-neutral-300">Email</span>
+            <div className="relative">
+              <Mail className="w-4 h-4 text-neutral-400 absolute start-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                autoComplete="email"
+                className="w-full rounded-lg bg-[#171717] border border-[#2a2a2a] ps-10 pe-4 py-2.5 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:border-neutral-400"
+              />
+            </div>
+          </label>
+
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-neutral-300">
+              Password {mode === 'signup' && '(6+ characters)'}
+            </span>
+            <div className="relative">
+              <Lock className="w-4 h-4 text-neutral-400 absolute start-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                className="w-full rounded-lg bg-[#171717] border border-[#2a2a2a] ps-10 pe-10 py-2.5 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:border-neutral-400"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute end-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white p-1 cursor-pointer"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </label>
 
           <button
-            type="button"
-            onClick={onContinueAsGuest}
-            className="text-xs text-white/65 hover:text-[#BF5AF2] underline underline-offset-4 transition-colors cursor-pointer py-1"
+            type="submit"
+            className="w-full flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-white hover:bg-neutral-200 text-black font-semibold text-sm transition-colors cursor-pointer mt-2"
           >
-            Continue as Guest
+            {mode === 'signup' ? (
+              <>
+                <UserPlus className="w-4 h-4" />
+                <span>Sign Up</span>
+              </>
+            ) : (
+              <>
+                <LogIn className="w-4 h-4" />
+                <span>Sign In</span>
+              </>
+            )}
           </button>
-        </div>
+        </form>
+
+        <button
+          type="button"
+          onClick={onContinueAsGuest}
+          className="text-xs text-neutral-400 hover:text-white underline underline-offset-4 transition-colors cursor-pointer py-1"
+        >
+          Continue as Guest
+        </button>
       </div>
 
       {/* Bottom Footer Attribution */}
-      <p className="relative z-10 text-xs text-white/60 tracking-wide pt-4 text-center">
-        Made by [Your Name] in Nigeria
+      <p className="relative z-10 text-xs text-neutral-500 pt-4 text-center">
+        © Nova<span className="trademark">™</span> - All Rights Reserved
       </p>
     </div>
   );

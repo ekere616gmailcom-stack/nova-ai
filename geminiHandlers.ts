@@ -1,6 +1,9 @@
+import crypto from 'node:crypto';
 import {
   PollinationsRateLimitError,
+  blockOpenAI,
   callPollinationsText,
+  checkCreatorPromptOverride,
   classifyAiError,
   extractReadableError,
   generateChatJsonReply,
@@ -14,6 +17,7 @@ import {
 export interface ApiRequest {
   method?: string;
   url?: string;
+  params?: Record<string, string>;
   query?: Record<string, unknown>;
   body?: unknown;
   on?: (event: string, listener: (...args: unknown[]) => void) => void;
@@ -25,7 +29,8 @@ export interface ApiResponse {
   json: (body: unknown) => void;
   setHeader: (name: string, value: string) => void;
   write: (chunk: string) => unknown;
-  end: (chunk?: string) => void;
+  end: (chunk?: string | Buffer) => void;
+  redirect?: (status: number, url: string) => void;
   flushHeaders?: () => void;
   socket?: { setNoDelay?: (noDelay?: boolean) => void } | null;
 }
@@ -73,34 +78,6 @@ function rejectWrongMethod(req: ApiRequest, res: ApiResponse, allowed: 'GET' | '
   return false;
 }
 
-function getDimensionsForRatio(ratio: string): { width: number; height: number } {
-  switch (ratio) {
-    case '9:16':
-      return { width: 768, height: 1344 };
-    case '16:9':
-      return { width: 1344, height: 768 };
-    case '3:4':
-      return { width: 768, height: 1024 };
-    case '4:3':
-      return { width: 1024, height: 768 };
-    default:
-      return { width: 1024, height: 1024 };
-  }
-}
-
-const UNSAFE_IMAGE_WORDS_REGEX =
-  /\b(?:sexy|nude|naked|nudity|nsfw|porn|porno|pornography|erotic|lingerie|bikini|underwear|explicit|adult|blood|bloody|gore|kill|killing|murder|gun|guns|pistol|rifle|weapon|weapons|knife|shoot|shooting|violence|violent|death|dead|corpse|drug|drugs|cocaine|heroin|weed|suicide|self[- ]harm)\b/gi;
-
-function cleanSafeImagePrompt(rawPrompt: string): string {
-  const withoutBlocked = rawPrompt
-    .replace(/^\/image\s+/i, '')
-    .replace(UNSAFE_IMAGE_WORDS_REGEX, 'cinematic, stylish')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/^[\s,.;:-]+|[\s,.;:-]+$/g, '')
-    .trim();
-  return withoutBlocked || 'beautiful landscape';
-}
-
 function buildPollinationsDirectImageUrl(
   prompt: string,
   width: number,
@@ -112,9 +89,219 @@ function buildPollinationsDirectImageUrl(
   url.searchParams.set('height', String(height));
   url.searchParams.set('model', 'turbo');
   url.searchParams.set('nologo', 'true');
-  url.searchParams.set('safe', 'true');
   url.searchParams.set('seed', String(seed));
   return url.toString();
+}
+
+const IMAGE_BUFFER_CACHE = new Map<string, { buffer: Buffer; contentType: string; createdAt: number }>();
+const IMAGE_BUFFER_CACHE_MAX = 50;
+
+function saveCachedImageBuffer(buffer: Buffer, contentType: string): string {
+  const id = crypto.randomBytes(8).toString('hex');
+  if (IMAGE_BUFFER_CACHE.size >= IMAGE_BUFFER_CACHE_MAX) {
+    const oldest = IMAGE_BUFFER_CACHE.keys().next().value;
+    if (oldest) IMAGE_BUFFER_CACHE.delete(oldest);
+  }
+  IMAGE_BUFFER_CACHE.set(id, { buffer, contentType, createdAt: Date.now() });
+  return id;
+}
+
+function buildPicsumFallbackUrl(width: number, height: number, seed: number): string {
+  const safeW = Math.max(256, Math.min(1280, Math.round(width) || 512));
+  const safeH = Math.max(256, Math.min(1280, Math.round(height) || 512));
+  return `https://picsum.photos/${safeW}/${safeH}?random=${seed}`;
+}
+
+async function tryGeminiImageGeneration(prompt: string): Promise<{ buffer: Buffer; contentType: string } | null> {
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey) return null;
+  try {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent`;
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseModalities: ['IMAGE'] },
+      }),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json().catch(() => null)) as {
+      candidates?: Array<{
+        content?: { parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> };
+      }>;
+    } | null;
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    for (const part of parts) {
+      if (part.inlineData?.data && part.inlineData.mimeType?.startsWith('image/')) {
+        return {
+          buffer: Buffer.from(part.inlineData.data, 'base64'),
+          contentType: part.inlineData.mimeType,
+        };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchVerifiedPollinationsImage(
+  pollinationsUrl: string
+): Promise<
+  | { ok: true; buffer: Buffer; contentType: string }
+  | { ok: false; rateLimited: boolean; retryAfter: number }
+> {
+  try {
+    const res = await fetch(pollinationsUrl, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json, image/jpeg;q=0.9, image/png;q=0.8',
+      },
+      signal: AbortSignal.timeout(25000),
+    });
+
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    const retryHeader = Number(res.headers.get('retry-after') || '0');
+    const arrayBuf = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuf);
+
+    // Pollinations sends 402/429 JSON OR 400 yellow error JPEG when rate limited
+    if (res.status === 402 || res.status === 429) {
+      let retryAfter = retryHeader || 45;
+      if (ct.includes('json')) {
+        const txt = buffer.toString('utf8');
+        const m = txt.match(/wait\s+(\d+)\s+seconds/i);
+        if (m) retryAfter = Math.max(retryAfter, Number(m[1]));
+      }
+      return { ok: false, rateLimited: true, retryAfter: Math.max(45, retryAfter) };
+    }
+
+    if (res.status === 400) {
+      const textHead = ct.includes('json') || ct.includes('text') ? buffer.toString('utf8').toLowerCase() : '';
+      const isLimit =
+        textHead.includes('limit') ||
+        textHead.includes('45 seconds') ||
+        textHead.includes('free_limit') ||
+        ct.startsWith('image/'); // Pollinations sends 400 yellow banner as image/jpeg
+      return { ok: false, rateLimited: isLimit, retryAfter: 45 };
+    }
+
+    if (!res.ok || !ct.startsWith('image/') || buffer.length < 22000) {
+      return { ok: false, rateLimited: false, retryAfter: 0 };
+    }
+
+    return { ok: true, buffer, contentType: ct.split(';')[0] || 'image/jpeg' };
+  } catch {
+    return { ok: false, rateLimited: false, retryAfter: 0 };
+  }
+}
+
+export async function handleGenerateImage(req: ApiRequest, res: ApiResponse): Promise<void> {
+  if (rejectWrongMethod(req, res, 'POST')) return;
+
+  let body: {
+    prompt?: string;
+    width?: number;
+    height?: number;
+    seed?: number;
+    allowFallback?: boolean;
+  };
+  try {
+    body = await parseJsonBody(req);
+  } catch {
+    res.status(400).json({ ok: false, error: 'Invalid JSON request body.' });
+    return;
+  }
+
+  const rawPrompt = (body.prompt || '').trim() || 'minimal dark landscape';
+  const width = typeof body.width === 'number' && Number.isFinite(body.width) ? body.width : 512;
+  const height = typeof body.height === 'number' && Number.isFinite(body.height) ? body.height : 512;
+  const seed = typeof body.seed === 'number' && Number.isFinite(body.seed) ? Math.floor(body.seed) : Date.now();
+  const allowFallback = body.allowFallback === true;
+  const picsumUrl = buildPicsumFallbackUrl(width, height, seed);
+
+  // 1. Try Gemini Image (if GEMINI_API_KEY is configured)
+  const geminiResult = await tryGeminiImageGeneration(rawPrompt);
+  if (geminiResult) {
+    const id = saveCachedImageBuffer(geminiResult.buffer, geminiResult.contentType);
+    const imageUrl = `/api/image/cached/${id}?w=${width}&h=${height}&seed=${seed}`;
+    res.status(200).json({ ok: true, imageUrl, source: 'gemini' });
+    return;
+  }
+
+  // 2. Try Pollinations (checked server-side so yellow banner is NEVER forwarded)
+  const safePrompt = `safe, family friendly, ${rawPrompt}, vibrant natural colours`;
+  const pollinationsUrl = buildPollinationsDirectImageUrl(safePrompt, width, height, seed);
+  const pollResult = await fetchVerifiedPollinationsImage(pollinationsUrl);
+
+  if (pollResult.ok) {
+    const id = saveCachedImageBuffer(pollResult.buffer, pollResult.contentType);
+    const imageUrl = `/api/image/cached/${id}?w=${width}&h=${height}&seed=${seed}`;
+    res.status(200).json({ ok: true, imageUrl, source: 'pollinations' });
+    return;
+  }
+
+  if (pollResult.rateLimited && !allowFallback) {
+    res.status(429).json({
+      ok: false,
+      rateLimited: true,
+      retryAfter: 45,
+      error: 'Image limit reached. Wait 45s.',
+    });
+    return;
+  }
+
+  // 3. Picsum fallback
+  res.status(200).json({ ok: true, imageUrl: picsumUrl, source: 'picsum' });
+}
+
+export async function handleCachedImage(req: ApiRequest, res: ApiResponse): Promise<void> {
+  if (rejectWrongMethod(req, res, 'GET')) return;
+  const id = req.params?.id || '';
+  const entry = id ? IMAGE_BUFFER_CACHE.get(id) : undefined;
+  if (entry) {
+    res.setHeader('Content-Type', entry.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.status(200);
+    res.end(entry.buffer);
+    return;
+  }
+  const parsedUrl = new URL(req.url || '/', 'http://localhost');
+  const w = Number(parsedUrl.searchParams.get('w') || '512') || 512;
+  const h = Number(parsedUrl.searchParams.get('h') || '512') || 512;
+  const seed = Number(parsedUrl.searchParams.get('seed') || String(Date.now())) || Date.now();
+  const fallback = buildPicsumFallbackUrl(w, h, seed);
+  res.setHeader('Location', fallback);
+  res.status(302).end();
+}
+
+export async function handleSafeImageProxy(req: ApiRequest, res: ApiResponse): Promise<void> {
+  if (rejectWrongMethod(req, res, 'GET')) return;
+  const parsedUrl = new URL(req.url || '/', 'http://localhost');
+  const targetUrl = parsedUrl.searchParams.get('url') || '';
+  const w = Number(parsedUrl.searchParams.get('w') || '512') || 512;
+  const h = Number(parsedUrl.searchParams.get('h') || '512') || 512;
+  const seed = Number(parsedUrl.searchParams.get('seed') || String(Date.now())) || Date.now();
+  const fallback = buildPicsumFallbackUrl(w, h, seed);
+
+  if (targetUrl.startsWith('https://image.pollinations.ai/')) {
+    const result = await fetchVerifiedPollinationsImage(targetUrl);
+    if (result.ok) {
+      res.setHeader('Content-Type', result.contentType);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.status(200);
+      res.end(result.buffer);
+      return;
+    }
+  }
+
+  res.setHeader('Location', fallback);
+  res.status(302).end();
 }
 
 export async function handleHealth(req: ApiRequest, res: ApiResponse): Promise<void> {
@@ -157,13 +344,20 @@ export async function handleChat(req: ApiRequest, res: ApiResponse): Promise<voi
       return;
     }
 
+    const extractedUserLine =
+      cleanPrompt.match(/(?:^|\s)User:\s*([\s\S]*?)(?:\s+Nova:\s*$|$)/i)?.[1]?.trim() || cleanPrompt;
+    const creatorOverride = checkCreatorPromptOverride(extractedUserLine);
+    if (creatorOverride) {
+      res.status(200).json({ success: true, reply: creatorOverride });
+      return;
+    }
+
     try {
-      const reply = await callPollinationsText({
+      const rawReply = await callPollinationsText({
         prompt: cleanPrompt,
         systemPrompt: systemParam.trim() || undefined,
-        timeoutMs: 18000,
       });
-      res.status(200).json({ success: true, reply });
+      res.status(200).json({ success: true, reply: blockOpenAI(rawReply) });
     } catch (err: unknown) {
       const classified = classifyAiError(err);
       console.error(`Chat GET proxy error [${classified.code}]:`, classified.logMessage);
@@ -318,57 +512,6 @@ export async function handleChat(req: ApiRequest, res: ApiResponse): Promise<voi
   }
 }
 
-export async function handleImage(req: ApiRequest, res: ApiResponse): Promise<void> {
-  if (rejectWrongMethod(req, res, 'POST')) return;
-
-  let body: {
-    prompt?: string;
-    aspectRatio?: string;
-    style?: string;
-    genMode?: 'real-photo' | 'ai-art';
-    count?: number;
-    sourceImage?: { base64: string; mimeType: string };
-  };
-
-  try {
-    body = await parseJsonBody(req);
-  } catch {
-    res.status(400).json({ error: 'Invalid JSON request body.' });
-    return;
-  }
-
-  const { prompt, aspectRatio, style, genMode = 'real-photo', count } = body;
-
-  if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
-    res.status(400).json({ error: 'A prompt is required for image generation.' });
-    return;
-  }
-
-  const validRatios = new Set(['1:1', '3:4', '4:3', '9:16', '16:9']);
-  const safeRatio = aspectRatio && validRatios.has(aspectRatio) ? aspectRatio : '1:1';
-  const { width, height } = getDimensionsForRatio(safeRatio);
-  const numImages = count === 4 ? 4 : 1;
-
-  const safeUserPrompt = cleanSafeImagePrompt(prompt);
-  const basePrompt = `safe, family friendly, ${safeUserPrompt}, vibrant natural colours`;
-  const baseSeed = Date.now();
-  const imageUrls = Array.from({ length: numImages }, (_, idx) => {
-    const variationPrompt =
-      numImages > 1
-        ? `${basePrompt}, variation ${idx + 1}`
-        : basePrompt;
-    return buildPollinationsDirectImageUrl(variationPrompt, width, height, baseSeed + idx);
-  });
-
-  res.status(200).json({
-    imageUrl: imageUrls[0],
-    imageUrls,
-    caption: safeUserPrompt,
-    model: 'turbo',
-    genMode,
-  });
-}
-
 export async function handleWallpaper(req: ApiRequest, res: ApiResponse): Promise<void> {
   if (rejectWrongMethod(req, res, 'POST')) return;
 
@@ -467,7 +610,8 @@ export async function handleWallpaper(req: ApiRequest, res: ApiResponse): Promis
   const choices = stylePresets[safeStyle] || stylePresets.Nature;
   const pick = choices[Math.abs(numericSeed) % choices.length];
 
-  const imageUrl = buildPollinationsDirectImageUrl(pick.visual, 720, 1280, numericSeed);
+  const directUrl = buildPollinationsDirectImageUrl(pick.visual, 512, 512, numericSeed);
+  const imageUrl = `/api/image/safe?url=${encodeURIComponent(directUrl)}&w=512&h=512&seed=${numericSeed}`;
   res.status(200).json({
     imageUrl,
     title: pick.title,
@@ -568,7 +712,6 @@ export async function handleBuildApp(req: ApiRequest, res: ApiResponse): Promise
     const rawText = await callPollinationsText({
       prompt: promptForAi,
       systemPrompt: builderSystemInstruction,
-      timeoutMs: 25000,
       jsonMode: true,
     });
 

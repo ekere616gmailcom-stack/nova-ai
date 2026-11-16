@@ -66,6 +66,27 @@ export const WALLPAPER_STYLES: WallpaperStyle[] = [
   'Motivation',
 ];
 
+export const PREMIUM_WALLPAPER_CATEGORIES = [
+  'Anime',
+  'Nature',
+  'Football',
+  'Luxury',
+  'Bible',
+  'Cars',
+  'Aesthetic',
+] as const;
+
+export type PremiumWallpaperCategory = (typeof PREMIUM_WALLPAPER_CATEGORIES)[number];
+
+export interface SavedWallpaperEntry {
+  id: string;
+  prompt: string;
+  category?: string;
+  imageUrl: string;
+  screenTab: 'home' | 'lock';
+  createdAtMs: number;
+}
+
 export const WALLPAPER_TIMES: WallpaperTime[] = ['6AM', '7AM', '8AM'];
 
 export interface WallpaperState {
